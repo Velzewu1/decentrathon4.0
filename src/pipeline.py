@@ -14,11 +14,11 @@ from datetime import datetime
 sys.path.append(str(Path(__file__).parent))
 
 # Импортируем модули
-from etl import DataLoader
+from etl_v2 import DataLoaderV2
 from features import FeatureEngineering
-from scoring import BenefitScoring
+from scoring_v2 import BenefitScoringV2
 from ranking import ProductRanking
-from compose import PushComposer
+from compose_v2 import PushComposerV2
 from export import ResultExporter
 
 # Настройка логирования
@@ -36,8 +36,8 @@ logger = logging.getLogger(__name__)
 class RecommendationPipeline:
     """Основной пайплайн для генерации рекомендаций"""
     
-    def __init__(self, config_path: str = "conf/weights.yaml",
-                 templates_path: str = "conf/templates.yaml"):
+    def __init__(self, config_path: str = "conf/weights_v2.yaml",
+                 templates_path: str = "conf/templates_v2.yaml"):
         """
         Инициализация пайплайна
         
@@ -47,11 +47,11 @@ class RecommendationPipeline:
         """
         logger.info("Инициализация пайплайна")
         
-        self.data_loader = DataLoader(config_path)
+        self.data_loader = DataLoaderV2(config_path)
         self.feature_eng = FeatureEngineering(config_path)
-        self.scoring = BenefitScoring(config_path)
+        self.scoring = BenefitScoringV2(config_path)
         self.ranking = ProductRanking(config_path)
-        self.composer = PushComposer(config_path, templates_path)
+        self.composer = PushComposerV2(config_path, templates_path)
         self.exporter = ResultExporter()
         
         logger.info("Пайплайн инициализирован успешно")
@@ -78,16 +78,39 @@ class RecommendationPipeline:
         results = {}
         
         try:
-            # Шаг 1: Загрузка и предобработка данных
-            logger.info("\n[1/7] Загрузка и предобработка данных...")
-            processed_data = self.data_loader.preprocess(input_file)
-            results['processed_rows'] = len(processed_data)
-            logger.info(f"✓ Обработано {len(processed_data)} транзакций")
+            # Шаг 1: Загрузка данных из трех источников
+            logger.info("\n[1/7] Загрузка данных клиентов, транзакций и переводов...")
+            # Определяем пути к файлам
+            if input_file.endswith('clients.csv'):
+                clients_file = input_file
+                data_dir = str(Path(input_file).parent)
+            else:
+                # Если передан другой файл, ищем clients.csv в той же папке
+                data_dir = str(Path(input_file).parent)
+                clients_file = str(Path(data_dir) / 'clients.csv')
+            
+            clients_df, transactions_df = self.data_loader.load_all_data(clients_file, data_dir)
+            results['total_clients'] = len(clients_df)
+            results['processed_rows'] = len(transactions_df) if not transactions_df.empty else 0
+            logger.info(f"✓ Загружено {len(clients_df)} клиентов, {results['processed_rows']} записей")
             
             # Шаг 2: Создание признаков
             logger.info("\n[2/7] Расчет агрегированных признаков...")
-            features = self.feature_eng.create_features(processed_data)
-            results['total_clients'] = len(features)
+            if not transactions_df.empty:
+                features = self.feature_eng.create_features(transactions_df)
+            else:
+                # Если нет транзакций, используем только данные клиентов
+                features = clients_df.copy()
+                features['total_spend'] = 0
+                features['inflows'] = 0
+                features['outflows'] = 0
+                features['free_funds'] = features['avg_monthly_balance_KZT']
+            
+            # Добавляем эталонный продукт если есть
+            if 'reference_product' in transactions_df.columns and not transactions_df.empty:
+                ref_products = transactions_df.groupby('client_code')['reference_product'].first()
+                features = features.merge(ref_products.to_frame(), left_on='client_code', right_index=True, how='left')
+            
             results['total_features'] = len(features.columns)
             logger.info(f"✓ Создано {len(features.columns)} признаков для {len(features)} клиентов")
             
@@ -185,14 +208,32 @@ class RecommendationPipeline:
             logger.error("Файл должен быть в формате CSV")
             return False
         
-        # Проверка структуры
+        # Проверка структуры в зависимости от типа файла
         try:
             df = pd.read_csv(input_file, nrows=5)
-            required_columns = [
-                'client_code', 'name', 'status', 'age', 'city',
-                'avg_monthly_balance_KZT', 'date', 'category',
-                'amount', 'currency', 'type', 'direction'
-            ]
+            
+            if 'clients' in input_file:
+                # Для файла клиентов
+                required_columns = [
+                    'client_code', 'name', 'status', 'age', 'city',
+                    'avg_monthly_balance_KZT'
+                ]
+            elif 'transactions' in input_file:
+                # Для файла транзакций
+                required_columns = [
+                    'client_code', 'date', 'category', 'amount', 'currency'
+                ]
+            elif 'transfers' in input_file:
+                # Для файла переводов
+                required_columns = [
+                    'client_code', 'date', 'type', 'direction', 'amount', 'currency'
+                ]
+            else:
+                # По умолчанию проверяем как файл клиентов
+                required_columns = [
+                    'client_code', 'name', 'status', 'age', 'city',
+                    'avg_monthly_balance_KZT'
+                ]
             
             missing_columns = set(required_columns) - set(df.columns)
             if missing_columns:
@@ -206,134 +247,25 @@ class RecommendationPipeline:
             logger.error(f"Ошибка при чтении файла: {str(e)}")
             return False
     
-    def generate_sample_data(self, output_file: str = "data/sample_data.csv", 
-                            n_clients: int = 10, n_months: int = 3) -> str:
-        """
-        Генерация тестовых данных
-        
-        Args:
-            output_file: путь для сохранения тестовых данных
-            n_clients: количество клиентов
-            n_months: количество месяцев данных
-            
-        Returns:
-            Путь к сгенерированному файлу
-        """
-        logger.info(f"Генерация тестовых данных для {n_clients} клиентов")
-        
-        np.random.seed(42)  # Для воспроизводимости
-        
-        # Списки для генерации
-        names = ['Иван', 'Мария', 'Алексей', 'Елена', 'Дмитрий', 
-                'Анна', 'Сергей', 'Ольга', 'Андрей', 'Наталья']
-        statuses = ['Студент', 'Зарплатный клиент', 'Премиальный клиент', 'Стандартный клиент']
-        cities = ['Алматы', 'Астана', 'Шымкент', 'Караганда', 'Актобе']
-        categories = ['Продукты', 'Рестораны', 'Такси', 'Путешествия', 'Отели',
-                     'Ювелирные изделия', 'Косметика и парфюмерия', 'Онлайн-сервисы',
-                     'Едим дома', 'Смотрим дома', 'Играем дома', 'Транспорт', 
-                     'Одежда', 'Электроника', 'Образование']
-        currencies = ['KZT', 'KZT', 'KZT', 'KZT', 'USD', 'EUR']  # Больше KZT
-        types_out = ['card_out', 'atm_withdrawal', 'p2p_out', 'fx_buy', 'fx_sell']
-        types_in = ['salary_in', 'stipend_in', 'cashback_in', 'refund_in']
-        
-        data = []
-        
-        for client_id in range(1, n_clients + 1):
-            # Генерируем профиль клиента
-            name = names[client_id % len(names)]
-            status = np.random.choice(statuses)
-            age = np.random.randint(18, 65)
-            city = np.random.choice(cities)
-            
-            # Баланс зависит от статуса
-            if status == 'Премиальный клиент':
-                avg_balance = np.random.randint(500000, 2000000)
-            elif status == 'Зарплатный клиент':
-                avg_balance = np.random.randint(150000, 500000)
-            elif status == 'Стандартный клиент':
-                avg_balance = np.random.randint(50000, 150000)
-            else:  # Студент
-                avg_balance = np.random.randint(10000, 50000)
-            
-            # Генерируем транзакции
-            n_transactions = np.random.randint(20, 100)
-            
-            for _ in range(n_transactions):
-                # Дата в пределах последних n_months месяцев
-                days_ago = np.random.randint(0, n_months * 30)
-                date = pd.Timestamp.now() - pd.Timedelta(days=days_ago)
-                
-                # Направление транзакции (больше расходов)
-                direction = np.random.choice(['out', 'in'], p=[0.8, 0.2])
-                
-                if direction == 'out':
-                    category = np.random.choice(categories)
-                    transaction_type = np.random.choice(types_out)
-                    
-                    # Сумма зависит от категории
-                    if category in ['Путешествия', 'Отели']:
-                        amount = np.random.randint(50000, 300000)
-                    elif category in ['Ювелирные изделия']:
-                        amount = np.random.randint(30000, 200000)
-                    elif category in ['Рестораны']:
-                        amount = np.random.randint(5000, 30000)
-                    elif category in ['Такси']:
-                        amount = np.random.randint(1000, 10000)
-                    else:
-                        amount = np.random.randint(1000, 50000)
-                else:
-                    category = 'Доход'
-                    transaction_type = np.random.choice(types_in)
-                    amount = np.random.randint(10000, avg_balance)
-                
-                currency = np.random.choice(currencies)
-                
-                data.append({
-                    'client_code': client_id,
-                    'name': name,
-                    'status': status,
-                    'age': age,
-                    'city': city,
-                    'avg_monthly_balance_KZT': avg_balance,
-                    'date': date.strftime('%Y-%m-%d'),
-                    'category': category,
-                    'amount': amount,
-                    'currency': currency,
-                    'type': transaction_type,
-                    'direction': direction
-                })
-        
-        # Создаем DataFrame и сохраняем
-        df = pd.DataFrame(data)
-        
-        # Создаем директорию если не существует
-        Path(output_file).parent.mkdir(exist_ok=True)
-        
-        df.to_csv(output_file, index=False, encoding='utf-8-sig')
-        logger.info(f"✓ Тестовые данные сохранены в {output_file}")
-        logger.info(f"  Клиентов: {n_clients}")
-        logger.info(f"  Транзакций: {len(df)}")
-        
-        return output_file
 
 
 def main():
     """Главная функция для запуска из командной строки"""
     parser = argparse.ArgumentParser(
-        description='Пайплайн для генерации персонализированных push-уведомлений'
+        description='Пайплайн для генерации персонализированных push-уведомлений для хакатона'
     )
     
     parser.add_argument(
         'input_file',
         nargs='?',
-        default=None,
-        help='Путь к входному CSV файлу с транзакциями'
+        default='data/clients.csv',
+        help='Путь к файлу clients.csv (по умолчанию: data/clients.csv)'
     )
     
     parser.add_argument(
         '-o', '--output',
-        default='recommendations.csv',
-        help='Путь к выходному файлу (по умолчанию: recommendations.csv)'
+        default='data/recommendations.csv',
+        help='Путь к выходному файлу (по умолчанию: data/recommendations.csv)'
     )
     
     parser.add_argument(
@@ -349,19 +281,6 @@ def main():
     )
     
     parser.add_argument(
-        '--generate-sample',
-        action='store_true',
-        help='Сгенерировать тестовые данные'
-    )
-    
-    parser.add_argument(
-        '--n-clients',
-        type=int,
-        default=10,
-        help='Количество клиентов для генерации тестовых данных (по умолчанию: 10)'
-    )
-    
-    parser.add_argument(
         '--validate-only',
         action='store_true',
         help='Только проверить входной файл без запуска пайплайна'
@@ -372,20 +291,10 @@ def main():
     # Инициализация пайплайна
     pipeline = RecommendationPipeline()
     
-    # Генерация тестовых данных если запрошено
-    if args.generate_sample:
-        sample_file = pipeline.generate_sample_data(
-            n_clients=args.n_clients
-        )
-        if not args.input_file:
-            args.input_file = sample_file
-            print(f"\nИспользуем сгенерированные данные: {sample_file}")
-    
     # Проверка наличия входного файла
     if not args.input_file:
         print("\nОшибка: не указан входной файл!")
-        print("Используйте: python pipeline.py <input_file.csv>")
-        print("Или сгенерируйте тестовые данные: python pipeline.py --generate-sample")
+        print("Используйте: python pipeline.py data/clients.csv")
         return
     
     # Валидация входного файла

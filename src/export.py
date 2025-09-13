@@ -53,8 +53,18 @@ class ResultExporter:
         # Сортируем по client_code
         export_df = export_df.sort_values('client_code')
         
+        # Определяем правильный путь для сохранения
+        if Path(filename).is_absolute() or '/' in filename or '\\' in filename:
+            # Если filename уже содержит путь, используем его как есть
+            output_path = Path(filename)
+        else:
+            # Если это просто имя файла, добавляем к output_dir
+            output_path = self.output_dir / filename
+        
+        # Создаем директорию если не существует
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
         # Сохраняем в CSV
-        output_path = self.output_dir / filename
         export_df.to_csv(output_path, index=False, encoding='utf-8-sig')
         
         logger.info(f"Рекомендации сохранены в {output_path}")
@@ -82,7 +92,14 @@ class ResultExporter:
         """
         logger.info(f"Экспорт полных результатов в {filename}")
         
-        output_path = self.output_dir / filename
+        # Определяем правильный путь для сохранения
+        if Path(filename).is_absolute() or '/' in filename or '\\' in filename:
+            output_path = Path(filename)
+        else:
+            output_path = self.output_dir / filename
+        
+        # Создаем директорию если не существует
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Создаем Excel writer
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
@@ -294,7 +311,14 @@ class ResultExporter:
         """
         logger.info(f"Создание аналитического отчета {filename}")
         
-        output_path = self.output_dir / filename
+        # Определяем правильный путь для сохранения
+        if Path(filename).is_absolute() or '/' in filename or '\\' in filename:
+            output_path = Path(filename)
+        else:
+            output_path = self.output_dir / filename
+        
+        # Создаем директорию если не существует
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         
         with open(output_path, 'w', encoding='utf-8') as f:
             # Заголовок
