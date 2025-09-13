@@ -20,7 +20,7 @@
 
 1. Клонируйте репозиторий:
 ```bash
-git clone <repository-url>
+git clone <https://github.com/Velzewu1/decentrathon4.0.git>
 cd decentrathon4.0
 ```
 
@@ -31,19 +31,19 @@ pip install -r requirements.txt
 
 ## 🚀 Быстрый старт
 
-### Генерация тестовых данных и запуск:
+### Базовый запуск (результаты в папке `output/`):
 ```bash
-python src/pipeline.py --generate-sample
-```
-
-### Запуск с вашими данными:
-```bash
-python src/pipeline.py data/your_data.csv -o recommendations.csv
+python src/pipeline.py data/clients.csv
 ```
 
 ### Полный анализ с отчетами:
 ```bash
-python src/pipeline.py data/your_data.csv --full --report
+python src/pipeline.py data/clients.csv --full --report
+```
+
+### Кастомное имя файла:
+```bash
+python src/pipeline.py data/clients.csv -o output/my_results.csv
 ```
 
 ## 📊 Формат входных данных
@@ -66,22 +66,28 @@ CSV файл со следующими колонками:
 
 ```
 decentrathon4.0/
-├── src/
-│   ├── etl.py          # Загрузка и предобработка данных
-│   ├── features.py     # Расчет агрегированных признаков
-│   ├── scoring.py      # Расчет benefit score продуктов
-│   ├── ranking.py      # Ранжирование и выбор топ-4
-│   ├── compose.py      # Генерация push-уведомлений
-│   ├── export.py       # Экспорт результатов
-│   └── pipeline.py     # Главный пайплайн
-├── conf/
-│   ├── weights.yaml    # Конфигурация весов и параметров
-│   └── templates.yaml  # Шаблоны push-уведомлений
-├── tests/
-│   ├── test_scoring.py # Тесты модуля scoring
-│   └── test_compose.py # Тесты модуля compose
-├── data/               # Директория для данных
-└── requirements.txt    # Зависимости
+├── src/                        # Исходный код
+│   ├── pipeline.py             # Главный пайплайн
+│   ├── etl_v2.py              # Загрузка данных из 3 источников
+│   ├── features.py            # Создание признаков
+│   ├── scoring_v2.py          # Расчет benefit scores (10 продуктов)
+│   ├── ranking.py             # Ранжирование продуктов
+│   ├── compose_v2.py          # Генерация push-уведомлений (TOV)
+│   └── export.py              # Экспорт результатов
+├── conf/                      # Конфигурационные файлы
+│   ├── weights_v2.yaml        # Параметры 10 продуктов
+│   └── templates_v2.yaml      # Шаблоны push (TOV хакатона)
+├── data/                      # Входные данные
+│   ├── clients.csv            # Профили клиентов (60 кейсов)
+│   ├── client_X_transactions_3m.csv  # Транзакции за 3 месяца
+│   └── client_X_transfers_3m.csv     # Переводы за 3 месяца
+├── output/ 📁                 # РЕЗУЛЬТАТЫ И РЕШЕНИЯ
+│   ├── README.md              # Описание выходных файлов
+│   ├── recommendations.csv    # 🎯 ОСНОВНОЙ РЕЗУЛЬТАТ для хакатона
+│   ├── recommendations_full.xlsx     # Детальные результаты
+│   └── recommendations_report.txt    # Аналитический отчет
+├── tests/                     # Тесты
+└── requirements.txt           # Зависимости
 
 ```
 
@@ -149,26 +155,26 @@ python tests/test_scoring.py
 python tests/test_compose.py
 ```
 
-## 📊 Выходные файлы
+## 📊 Выходные файлы (папка `output/`)
 
-### recommendations.csv
-Основной файл с рекомендациями:
+### 🎯 recommendations.csv - ОСНОВНОЙ РЕЗУЛЬТАТ
+Файл для сдачи на хакатон:
 ```csv
 client_code,product,push_notification
-1,Карта для путешествий,"Иван, в августе вы сделали 12 поездок..."
-2,Премиальная карта,"Мария, у вас высокий остаток..."
+1,Кредитная карта,"Айгерим, ваши топ-категории — Оплата картой, Переводы, Продукты питания. Кредитная карта даёт до 10% кешбэка. Оформить карту."
+2,Депозит Мультивалютный,"Данияр, вы платите в USD. Выгодный обмен в приложении без комиссии. Открыть валютный счёт."
 ```
 
-### recommendations_full.xlsx (--full)
-Excel файл с листами:
-- Рекомендации
-- Топ-4 продукта
-- Benefit Scores
-- Статистика продуктов
-- Сводка по клиентам
+### 📋 recommendations_full.xlsx (при --full)
+Детальные результаты с 5 листами:
+- **Рекомендации** - основные результаты
+- **Топ-4 продукта** - все топ-4 для каждого клиента  
+- **Benefit Scores** - детальные scores по всем продуктам
+- **Статистика продуктов** - агрегированная статистика
+- **Сводка по клиентам** - информация о клиентах с результатами
 
-### recommendations_report.txt (--report)
-Текстовый отчет с аналитикой
+### 📈 recommendations_report.txt (при --report)
+Аналитический отчет с детальной статистикой
 
 ## ⚙️ Конфигурация
 

@@ -264,8 +264,8 @@ def main():
     
     parser.add_argument(
         '-o', '--output',
-        default='data/recommendations.csv',
-        help='Путь к выходному файлу (по умолчанию: data/recommendations.csv)'
+        default='output/recommendations.csv',
+        help='Путь к выходному файлу (по умолчанию: output/recommendations.csv)'
     )
     
     parser.add_argument(

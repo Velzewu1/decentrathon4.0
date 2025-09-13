@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class ResultExporter:
     """Класс для экспорта результатов"""
     
-    def __init__(self, output_dir: str = "data"):
+    def __init__(self, output_dir: str = "output"):
         """
         Инициализация экспортера
         
