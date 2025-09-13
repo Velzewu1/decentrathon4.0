@@ -266,7 +266,13 @@ class FeatureEngineering:
         has_credit['has_credit_activity'] = has_credit['credit_payments'] > 0
         
         # Топ-3 категории трат для каждого клиента
-        expenses = df[df['direction'] == 'out']
+        # Исключаем технические категории из переводов
+        excluded_categories = ['Оплата картой', 'Переводы', 'Снятие наличных', 'Доход', 
+                              'Кешбэк', 'Возврат', 'Пополнение', 'Коммунальные услуги',
+                              'Кредит', 'Кредитная карта', 'Рассрочка', 'Обмен валют',
+                              'Инвестиции', 'Депозит', 'Золото', 'Прочее']
+        
+        expenses = df[(df['direction'] == 'out') & (~df['category'].isin(excluded_categories))]
         top_categories = expenses.groupby(['client_code', 'category'])['amount_kzt'].sum().reset_index()
         
         def get_top_categories(group):
