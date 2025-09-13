@@ -68,15 +68,18 @@ CSV файл со следующими колонками:
 decentrathon4.0/
 ├── src/                        # Исходный код
 │   ├── pipeline.py             # Главный пайплайн
-│   ├── etl_v2.py              # Загрузка данных из 3 источников
+│   ├── etl.py                 # Загрузка данных из 3 источников
 │   ├── features.py            # Создание признаков
-│   ├── scoring_v2.py          # Расчет benefit scores (10 продуктов)
-│   ├── ranking.py             # Ранжирование продуктов
-│   ├── compose_v2.py          # Генерация push-уведомлений (TOV)
-│   └── export.py              # Экспорт результатов
+│   ├── scoring.py             # Расчет benefit scores (10 продуктов)
+│   ├── ranking.py             # Ранжирование продуктов с бизнес-правилами
+│   ├── compose.py             # Генерация push-уведомлений (TOV)
+│   ├── export.py              # Экспорт результатов
+│   ├── analytics.py           # Аналитические отчеты
+│   ├── edge_case_handler.py   # Обработка граничных случаев
+│   └── smart_recommender.py   # Умные рекомендации
 ├── conf/                      # Конфигурационные файлы
-│   ├── weights_v2.yaml        # Параметры 10 продуктов
-│   └── templates_v2.yaml      # Шаблоны push (TOV хакатона)
+│   ├── weights.yaml           # Параметры 10 продуктов
+│   └── templates.yaml         # Шаблоны push (TOV хакатона)
 ├── data/                      # Входные данные
 │   ├── clients.csv            # Профили клиентов (60 кейсов)
 │   ├── client_X_transactions_3m.csv  # Транзакции за 3 месяца

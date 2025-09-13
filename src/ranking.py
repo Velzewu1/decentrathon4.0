@@ -1,279 +1,362 @@
 """
-Модуль для ранжирования и выбора Top-4 продуктов
+Улучшенный модуль ранжирования продуктов с бизнес-правилами
 """
 import pandas as pd
 import numpy as np
-import yaml
-from pathlib import Path
-from typing import Dict, Any, List, Tuple
 import logging
+from typing import List, Dict, Tuple
+import random
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 
-class ProductRanking:
-    """Класс для ранжирования и выбора топ продуктов"""
+class ProductRankerV2:
+    """Улучшенный класс для ранжирования продуктов"""
     
-    def __init__(self, config_path: str = "conf/weights.yaml"):
+    def __init__(self, config_path: str = "conf/weights_v2.yaml"):
         """
-        Инициализация
+        Инициализация ранжировщика
         
         Args:
-            config_path: путь к файлу конфигурации
+            config_path: Путь к файлу конфигурации
         """
-        self.config = self._load_config(config_path)
-        self.product_priority = self.config['product_priority']
-        self.top_n = self.config['general']['top_products_count']
+        import yaml
+        with open(config_path, 'r', encoding='utf-8') as f:
+            self.config = yaml.safe_load(f)
         
-    def _load_config(self, config_path: str) -> Dict[str, Any]:
-        """Загрузка конфигурации из YAML файла"""
-        config_file = Path(config_path)
-        if not config_file.exists():
-            raise FileNotFoundError(f"Конфигурационный файл не найден: {config_path}")
+        # Приоритеты продуктов для tie-breaking
+        self.product_priorities = {
+            'Премиальная карта': 1,
+            'Карта для путешествий': 2,
+            'Кредитная карта': 3,
+            'Депозит Сберегательный': 4,
+            'Депозит Накопительный': 5,
+            'Депозит Мультивалютный': 6,
+            'Инвестиции': 7,
+            'Обмен валют': 8,
+            'Золотые слитки': 9,
+            'Кредит наличными': 10
+        }
         
-        with open(config_file, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f)
+        # Минимальная квота для каждого продукта (% от всех рекомендаций)
+        self.product_quotas = {
+            'Карта для путешествий': 0.10,  # Минимум 10%
+            'Премиальная карта': 0.15,
+            'Кредитная карта': 0.15,
+            'Депозит Сберегательный': 0.05,
+            'Депозит Накопительный': 0.05,
+            'Депозит Мультивалютный': 0.05,
+            'Инвестиции': 0.05,
+            'Обмен валют': 0.10,
+            'Золотые слитки': 0.02,
+            'Кредит наличными': 0.05
+        }
+        
+        # Счетчики для отслеживания квот
+        self.product_counts = {product: 0 for product in self.product_quotas.keys()}
+        self.total_recommendations = 0
     
-    def _get_priority_score(self, product_name: str) -> int:
+    def rank_products_for_clients(self, 
+                                  benefits_df: pd.DataFrame,
+                                  features_df: pd.DataFrame,
+                                  top_n: int = 4) -> pd.DataFrame:
         """
-        Получение приоритета продукта (чем меньше число, тем выше приоритет)
+        Ранжирование продуктов для всех клиентов с учетом бизнес-правил
         
         Args:
-            product_name: название продукта
+            benefits_df: DataFrame с benefit scores
+            features_df: DataFrame с признаками клиентов
+            top_n: Количество топ продуктов для каждого клиента
             
         Returns:
-            Приоритет продукта
+            DataFrame с ранжированными рекомендациями
         """
-        # Ищем продукт в списке приоритетов
-        for priority, name in self.product_priority.items():
-            if name == product_name:
-                return int(priority)
+        logger.info("Ранжирование продуктов с бизнес-правилами")
         
-        # Если продукт не найден, возвращаем низкий приоритет
-        return 999
-    
-    def rank_products(self, benefits: pd.DataFrame) -> pd.DataFrame:
-        """
-        Ранжирование продуктов для каждого клиента
+        recommendations = []
         
-        Args:
-            benefits: DataFrame с benefit scores
-            
-        Returns:
-            DataFrame с ранжированными продуктами
-        """
-        logger.info("Ранжирование продуктов для клиентов")
-        
-        result_list = []
-        
-        # Обрабатываем каждого клиента
-        for idx, row in benefits.iterrows():
+        for idx, row in benefits_df.iterrows():
             client_code = row['client_code']
+            client_features = features_df[features_df['client_code'] == client_code].iloc[0]
             
-            # Собираем все продукты с их benefit scores
-            products = []
-            
-            # Проходим по всем колонкам с benefit
-            for col in benefits.columns:
-                if col.startswith('benefit_') and col != 'benefit_Депозит':
-                    product_name = col.replace('benefit_', '')
-                    benefit_value = row[col]
-                    
-                    # Пропускаем продукты с отрицательным или нулевым benefit
-                    if benefit_value > 0 and not np.isinf(benefit_value):
-                        products.append({
-                            'product': product_name,
-                            'benefit': benefit_value,
-                            'priority': self._get_priority_score(product_name)
-                        })
-            
-            # Добавляем депозит (уже выбран лучший)
-            if row.get('benefit_Депозит', 0) > 0:
-                best_deposit = row.get('best_deposit_type', 'Депозит')
-                products.append({
-                    'product': 'Депозит',
-                    'benefit': row['benefit_Депозит'],
-                    'priority': self._get_priority_score('Депозит'),
-                    'deposit_type': best_deposit
-                })
-            
-            # Сортируем продукты: сначала по benefit (убывание), потом по приоритету (возрастание)
-            products_sorted = sorted(
-                products,
-                key=lambda x: (-x['benefit'], x['priority'])
+            # Получаем топ продукты для клиента
+            client_recommendations = self._rank_for_client(
+                row, client_features, top_n
             )
             
-            # Выбираем топ-N продуктов
-            top_products = products_sorted[:self.top_n]
-            
-            # Добавляем в результат
-            for rank, product_info in enumerate(top_products, 1):
-                result_list.append({
-                    'client_code': client_code,
-                    'rank': rank,
-                    'product': product_info['product'],
-                    'benefit': product_info['benefit'],
-                    'deposit_type': product_info.get('deposit_type', None)
-                })
+            recommendations.extend(client_recommendations)
         
-        result_df = pd.DataFrame(result_list)
+        # Применяем квоты для разнообразия
+        recommendations_df = pd.DataFrame(recommendations)
+        recommendations_df = self._apply_quotas(recommendations_df, benefits_df, features_df)
         
-        logger.info(f"Ранжирование завершено для {len(benefits)} клиентов")
-        
-        return result_df
+        logger.info(f"Ранжирование завершено для {len(benefits_df)} клиентов")
+        return recommendations_df
     
-    def get_main_product(self, ranked_products: pd.DataFrame) -> pd.DataFrame:
+    def _rank_for_client(self, 
+                         benefits: pd.Series,
+                         features: pd.Series,
+                         top_n: int = 4) -> List[Dict]:
         """
-        Получение основного (первого) продукта для каждого клиента
+        Ранжирование продуктов для одного клиента
         
         Args:
-            ranked_products: DataFrame с ранжированными продуктами
+            benefits: Series с benefit scores клиента
+            features: Series с признаками клиента
+            top_n: Количество топ продуктов
             
         Returns:
-            DataFrame с основным продуктом для каждого клиента
+            Список рекомендаций
         """
-        logger.info("Определение основного продукта для каждого клиента")
+        client_code = benefits['client_code']
         
-        # Выбираем продукт с рангом 1
-        main_products = ranked_products[ranked_products['rank'] == 1].copy()
+        # Извлекаем benefit scores
+        benefit_cols = [col for col in benefits.index if col.startswith('benefit_')]
+        product_benefits = {}
         
-        # Переименовываем колонки
-        main_products = main_products.rename(columns={
-            'product': 'main_product',
-            'benefit': 'main_benefit'
-        })
-        
-        # Удаляем колонку rank
-        main_products = main_products.drop(columns=['rank'])
-        
-        return main_products
-    
-    def get_recommendations_summary(self, ranked_products: pd.DataFrame, 
-                                   features: pd.DataFrame) -> pd.DataFrame:
-        """
-        Создание сводной таблицы рекомендаций
-        
-        Args:
-            ranked_products: DataFrame с ранжированными продуктами
-            features: DataFrame с признаками клиентов
+        for col in benefit_cols:
+            product = col.replace('benefit_', '')
+            score = benefits[col]
             
-        Returns:
-            DataFrame со сводкой рекомендаций
-        """
-        logger.info("Создание сводной таблицы рекомендаций")
+            # Применяем бизнес-правила для корректировки score
+            adjusted_score = self._apply_business_rules(
+                product, score, features
+            )
+            
+            product_benefits[product] = adjusted_score
         
-        # Получаем основной продукт
-        main_products = self.get_main_product(ranked_products)
+        # Обрабатываем депозиты особым образом
+        if 'benefit_Депозит' in benefits.index:
+            best_deposit = benefits.get('best_deposit_type', 'Депозит Накопительный')
+            product_benefits[best_deposit] = max(
+                product_benefits.get(best_deposit, 0),
+                benefits['benefit_Депозит']
+            )
         
-        # Добавляем информацию о клиенте
-        summary = main_products.merge(
-            features[['client_code', 'name', 'status', 'city']],
-            on='client_code',
-            how='left'
+        # Сортируем по score и приоритету
+        sorted_products = sorted(
+            product_benefits.items(),
+            key=lambda x: (
+                -x[1],  # По убыванию benefit
+                self.product_priorities.get(x[0], 999)  # По приоритету при равных benefit
+            )
         )
         
-        # Создаем список всех рекомендованных продуктов для каждого клиента
-        all_products = ranked_products.groupby('client_code').apply(
-            lambda x: ', '.join(x.sort_values('rank')['product'].tolist())
-        ).reset_index()
-        all_products.columns = ['client_code', 'all_products']
+        # Формируем рекомендации
+        recommendations = []
+        for rank, (product, score) in enumerate(sorted_products[:top_n], 1):
+            if score > 0:  # Только продукты с положительным benefit
+                recommendations.append({
+                    'client_code': client_code,
+                    'product': product,
+                    'benefit': score,
+                    'rank': rank
+                })
+                
+                # Обновляем счетчики
+                if rank == 1:  # Считаем только главный продукт
+                    self.product_counts[product] = self.product_counts.get(product, 0) + 1
+                    self.total_recommendations += 1
         
-        # Добавляем к сводке
-        summary = summary.merge(all_products, on='client_code', how='left')
-        
-        # Добавляем суммарный benefit от топ-4 продуктов
-        total_benefit = ranked_products.groupby('client_code')['benefit'].sum().reset_index()
-        total_benefit.columns = ['client_code', 'total_benefit']
-        
-        summary = summary.merge(total_benefit, on='client_code', how='left')
-        
-        return summary
+        return recommendations
     
-    def analyze_product_distribution(self, ranked_products: pd.DataFrame) -> pd.DataFrame:
+    def _apply_business_rules(self, 
+                              product: str,
+                              score: float,
+                              features: pd.Series) -> float:
         """
-        Анализ распределения продуктов
+        Применение бизнес-правил для корректировки score
         
         Args:
-            ranked_products: DataFrame с ранжированными продуктами
+            product: Название продукта
+            score: Исходный benefit score
+            features: Признаки клиента
             
         Returns:
-            DataFrame со статистикой по продуктам
+            Скорректированный score
         """
-        logger.info("Анализ распределения продуктов")
+        adjusted_score = score
         
-        # Считаем, сколько раз каждый продукт попал в топ
-        product_stats = ranked_products.groupby('product').agg({
-            'client_code': 'count',
-            'benefit': ['mean', 'median', 'std'],
-            'rank': 'mean'
-        }).reset_index()
+        # Правило 1: Усиливаем недопредставленные продукты
+        if self.total_recommendations > 0:
+            current_share = self.product_counts.get(product, 0) / self.total_recommendations
+            target_share = self.product_quotas.get(product, 0.05)
+            
+            if current_share < target_share:
+                # Усиливаем продукт если он недопредставлен
+                boost = 1 + (target_share - current_share) * 2
+                adjusted_score *= boost
         
-        # Переименовываем колонки
-        product_stats.columns = [
-            'product', 'count', 'benefit_mean', 
-            'benefit_median', 'benefit_std', 'avg_rank'
-        ]
+        # Правило 2: Карта для путешествий только если такси/путешествия в топе
+        if product == 'Карта для путешествий':
+            taxi_spend = features.get('spend_Такси', 0)
+            travel_spend = features.get('spend_Путешествия', 0)
+            total_spend = features.get('total_spend', 1)
+            
+            # Доля трат на такси/путешествия от общих трат
+            travel_share = (taxi_spend + travel_spend) / total_spend if total_spend > 0 else 0
+            
+            if travel_share > 0.25:  # Больше 25% трат на такси/путешествия
+                adjusted_score *= 1.5
+            elif travel_share < 0.15:  # Меньше 15% - сильно снижаем
+                adjusted_score *= 0.3
         
-        # Сортируем по количеству рекомендаций
-        product_stats = product_stats.sort_values('count', ascending=False)
+        # Правило 3: Депозиты для тех, у кого есть свободные средства
+        if 'Депозит' in product:
+            free_funds = features.get('free_funds', 0)
+            balance = features.get('avg_monthly_balance_KZT', 0)
+            if free_funds > 0 or balance > 500000:
+                adjusted_score *= 1.3  # Усиливаем на 30%
         
-        # Добавляем процент клиентов
-        total_clients = ranked_products['client_code'].nunique()
-        product_stats['client_percentage'] = (product_stats['count'] / total_clients * 100).round(1)
+        # Правило 4: Инвестиции для молодежи
+        if product == 'Инвестиции':
+            age = features.get('age', 40)
+            if age < 35:
+                adjusted_score *= 1.4  # Усиливаем на 40%
         
-        return product_stats
-
-
-def main():
-    """Тестовый запуск ranking"""
-    from scoring import BenefitScoring
+        # Правило 5: Обмен валют для тех, кто делает валютные операции
+        if product == 'Обмен валют':
+            fx_volume = features.get('fx_volume', 0)
+            if fx_volume > 100000:
+                adjusted_score *= 1.5  # Усиливаем на 50%
+        
+        # Правило 6: Премиальная карта для высоких трат на рестораны/косметику
+        if product == 'Премиальная карта':
+            restaurant_spend = features.get('spend_Кафе и рестораны', 0)
+            cosmetics_spend = features.get('spend_Косметика и парфюмерия', 0)
+            total_spend = features.get('total_spend', 1)
+            
+            # Доля трат на рестораны + косметику
+            premium_share = (restaurant_spend + cosmetics_spend) / total_spend if total_spend > 0 else 0
+            
+            if premium_share > 0.25:  # Больше 25% на премиальные категории
+                adjusted_score *= 2.0  # Сильно усиливаем
+        
+        # Правило 7: Мультивалютный депозит только при FX операциях
+        if product == 'Депозит Мультивалютный':
+            fx_volume = features.get('fx_volume', 0)
+            if fx_volume < 50000:  # Мало валютных операций
+                adjusted_score *= 0.2  # Сильно снижаем
+        
+        # Правило 8: Снижаем кредит наличными (уже сделано в scoring)
+        if product == 'Кредит наличными':
+            adjusted_score *= 0.5  # Дополнительно снижаем на 50%
+        
+        return adjusted_score
     
-    # Создаем тестовые данные с benefit scores
-    test_benefits = pd.DataFrame({
-        'client_code': [1, 2, 3],
-        'benefit_Карта для путешествий': [9560, 140, 6720],
-        'benefit_Премиальная карта': [18640, 1155, 7800],
-        'benefit_Кредитная карта': [0, 0, 0],
-        'benefit_Валютный счет': [1500, 312, 2320],
-        'benefit_Кредит наличными': [float('-inf'), 2350, float('-inf')],
-        'benefit_Депозит': [94250, 8550, 36000],
-        'best_deposit_type': ['Мультивалютный депозит', 'Сберегательный депозит', 'Мультивалютный депозит'],
-        'benefit_Инвестиции': [5000, 0, 0],
-        'benefit_Золото': [2500, 0, 0]
-    })
+    def _apply_quotas(self, 
+                      recommendations_df: pd.DataFrame,
+                      benefits_df: pd.DataFrame,
+                      features_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Применение квот для обеспечения разнообразия продуктов
+        
+        Args:
+            recommendations_df: DataFrame с рекомендациями
+            benefits_df: DataFrame с benefit scores
+            features_df: DataFrame с признаками
+            
+        Returns:
+            Скорректированный DataFrame
+        """
+        # Берем только топ-1 рекомендации
+        top1_recommendations = recommendations_df[recommendations_df['rank'] == 1].copy()
+        
+        # Проверяем квоты
+        total_clients = len(top1_recommendations)
+        product_distribution = top1_recommendations['product'].value_counts()
+        
+        for product, min_quota in self.product_quotas.items():
+            current_count = product_distribution.get(product, 0)
+            min_count = int(total_clients * min_quota)
+            
+            if current_count < min_count:
+                # Нужно добавить этот продукт некоторым клиентам
+                needed = min_count - current_count
+                
+                # Находим клиентов, которым можно заменить рекомендацию
+                candidates = self._find_replacement_candidates(
+                    top1_recommendations, benefits_df, product, needed
+                )
+                
+                # Заменяем рекомендации
+                for client_code in candidates:
+                    top1_recommendations.loc[
+                        top1_recommendations['client_code'] == client_code, 
+                        'product'
+                    ] = product
+                    
+                    logger.debug(f"Заменена рекомендация для клиента {client_code} на {product}")
+        
+        return top1_recommendations
     
-    # Создаем тестовые признаки
-    test_features = pd.DataFrame({
-        'client_code': [1, 2, 3],
-        'name': ['Иван', 'Мария', 'Петр'],
-        'status': ['Премиальный клиент', 'Студент', 'Зарплатный клиент'],
-        'city': ['Алматы', 'Астана', 'Шымкент']
-    })
-    
-    # Ранжируем продукты
-    ranking = ProductRanking()
-    ranked_df = ranking.rank_products(test_benefits)
-    
-    print("\nРанжированные продукты:")
-    print(ranked_df)
-    
-    # Получаем основные продукты
-    main_products_df = ranking.get_main_product(ranked_df)
-    print("\nОсновные продукты:")
-    print(main_products_df)
-    
-    # Создаем сводку
-    summary_df = ranking.get_recommendations_summary(ranked_df, test_features)
-    print("\nСводка рекомендаций:")
-    print(summary_df)
-    
-    # Анализируем распределение
-    stats_df = ranking.analyze_product_distribution(ranked_df)
-    print("\nСтатистика по продуктам:")
-    print(stats_df)
+    def _find_replacement_candidates(self,
+                                    recommendations_df: pd.DataFrame,
+                                    benefits_df: pd.DataFrame,
+                                    target_product: str,
+                                    needed_count: int) -> List[int]:
+        """
+        Найти клиентов для замены рекомендации
+        
+        Args:
+            recommendations_df: Текущие рекомендации
+            benefits_df: Benefit scores
+            target_product: Целевой продукт
+            needed_count: Сколько нужно заменить
+            
+        Returns:
+            Список client_code для замены
+        """
+        candidates = []
+        
+        # Находим клиентов с overrepresented продуктами
+        product_counts = recommendations_df['product'].value_counts()
+        overrepresented = product_counts[product_counts > len(recommendations_df) * 0.3]
+        
+        if len(overrepresented) > 0:
+            # Берем клиентов с самым популярным продуктом
+            most_common_product = overrepresented.index[0]
+            potential_clients = recommendations_df[
+                recommendations_df['product'] == most_common_product
+            ]['client_code'].values
+            
+            # Проверяем, что у них есть хотя бы минимальный benefit для target_product
+            for client_code in potential_clients[:needed_count]:
+                client_benefits = benefits_df[benefits_df['client_code'] == client_code]
+                if len(client_benefits) > 0:
+                    target_benefit = client_benefits.iloc[0].get(f'benefit_{target_product}', 0)
+                    if target_benefit > 0:
+                        candidates.append(client_code)
+        
+        return candidates[:needed_count]
 
 
 if __name__ == "__main__":
-    main()
+    # Тестирование
+    print("Тестирование улучшенного ранжирования...")
+    
+    import sys
+    sys.path.append('src')
+    from etl_v2 import DataLoaderV2
+    from features import FeatureEngineering
+    from scoring_v2 import BenefitScoringV2
+    
+    # Загружаем данные
+    loader = DataLoaderV2()
+    clients_df, transactions_df = loader.load_all_data('data/clients.csv', 'data')
+    
+    # Создаем признаки
+    fe = FeatureEngineering('conf/weights.yaml')
+    features = fe.create_features(transactions_df)
+    
+    # Считаем benefits
+    scorer = BenefitScoringV2('conf/weights_v2.yaml')
+    benefits = scorer.calculate_all_benefits(features)
+    
+    # Ранжируем с новыми правилами
+    ranker = ProductRankerV2('conf/weights_v2.yaml')
+    recommendations = ranker.rank_products_for_clients(benefits, features, top_n=1)
+    
+    print("\nРаспределение продуктов:")
+    print(recommendations['product'].value_counts())
+    print(f"\nВсего уникальных продуктов: {len(recommendations['product'].unique())}")

@@ -1,101 +1,67 @@
-# Шаблоны push-уведомлений для различных продуктов
-# Правила:
-# - Максимум 220 символов
-# - Без CAPS LOCK
-# - Максимум один восклицательный знак
-# - CTA: Открыть, Настроить, Посмотреть
-# - Формат валюты: "2 490 ₸"
+# Шаблоны push-уведомлений (версия 3.0)
+# Исправлены форматирование, консистентность названий и соответствие продуктам
 
+# Карта для путешествий
 travel_card:
-  taxi_focus:
-    template: "{name}, в {month} вы сделали {n_taxi} поездок на такси на {sum_taxi:.0f} ₸. С картой для путешествий вернули бы ≈{benefit:.0f} ₸. Откройте карту."
-    required_fields: ["name", "month", "n_taxi", "sum_taxi", "benefit"]
-  
-  travel_focus:
-    template: "{name}, ваши траты на путешествия за {period} составили {travel_spend:.0f} ₸. Карта для путешествий вернёт до {benefit:.0f} ₸. Оформить сейчас."
-    required_fields: ["name", "period", "travel_spend", "benefit"]
-  
-  hotel_focus:
-    template: "{name}, вы потратили {hotel_spend:.0f} ₸ на отели. С travel-картой кешбэк составил бы {benefit:.0f} ₸. Откройте карту."
-    required_fields: ["name", "hotel_spend", "benefit"]
+  template: "{name}, в {month} у вас {taxi_count} поездок на такси на {taxi_amount}. С картой для путешествий вернули бы {cashback_amount} кешбэком. Оформить карту."
+  required_fields: ["name", "month", "taxi_count", "taxi_amount", "cashback_amount"]
+  validation:
+    min_spend: 1000  # Минимум 1000 тенге трат
+    max_cashback_rate: 0.04  # Максимум 4% от трат
 
+# Премиальная карта
 premium_card:
   high_balance:
-    template: "{name}, у вас высокий остаток на счету. Премиальная карта даст до {percent}% кешбэка и бесплатные снятия. Подключите сейчас."
-    required_fields: ["name", "percent"]
-  
-  restaurant_lover:
-    template: "{name}, ваши траты в ресторанах — {restaurant_spend:,.0f} ₸. Премиум-карта вернёт до {benefit:,.0f} ₸ кешбэка. Оформить карту."
-    required_fields: ["name", "restaurant_spend", "benefit"]
-  
-  luxury_spender:
-    template: "{name}, с премиальной картой ваш кешбэк за {period} составил бы {benefit:,.0f} ₸. Откройте карту сегодня."
-    required_fields: ["name", "period", "benefit"]
-
-credit_card:
-  top_categories:
-    template: "{name}, ваши топ-категории — {cat1}, {cat2}, {cat3}. Кредитная карта даёт до 10% кешбэка и рассрочку. Оформить карту."
-    required_fields: ["name", "cat1", "cat2", "cat3"]
-  
-  online_services:
-    template: "{name}, вы активно пользуетесь онлайн-сервисами. Кредитная карта вернёт до {benefit:,.0f} ₸ кешбэка. Открыть карту."
-    required_fields: ["name", "benefit"]
-  
-  installments:
-    template: "{name}, оформите покупки в рассрочку с кредитной картой и получайте до 10% кешбэка. Подключить сейчас."
+    template: "{name}, у вас высокий остаток на счету. Премиальная карта даст до 4% кешбэка на все покупки и бесплатные снятия. Подключить карту."
     required_fields: ["name"]
+  restaurant_lover:
+    template: "{name}, вы часто в ресторанах ({restaurant_amount}/мес). Премиальная карта вернёт 4% с этих трат. Подключить карту."
+    required_fields: ["name", "restaurant_amount"]
 
-deposits:
-  multicurrency:
-    template: "{name}, защитите сбережения от курсовых колебаний. Мультивалютный вклад под {rate}% годовых. Открыть вклад."
-    required_fields: ["name", "rate"]
-  
-  savings:
-    template: "{name}, свободные средства лучше разместить на вкладе под {rate}%. Доход составит {benefit:,.0f} ₸. Открыть вклад."
-    required_fields: ["name", "rate", "benefit"]
-  
-  accumulative:
-    template: "{name}, накопительный вклад под {rate}% с возможностью пополнения. Откройте сейчас."
-    required_fields: ["name", "rate"]
+# Кредитная карта
+credit_card:
+  template: "{name}, ваши топ-категории — {top_category_1}, {top_category_2}, {top_category_3}. Кредитная карта даёт до 10% кешбэка в любимых категориях. Оформить карту."
+  required_fields: ["name", "top_category_1", "top_category_2", "top_category_3"]
 
+# Обмен валют
 fx:
-  active_trader:
-    template: "{name}, ваш объём валютных операций — {fx_volume:,.0f} ₸. Получайте кешбэк {benefit:,.0f} ₸ с валютным счётом. Открыть счёт."
-    required_fields: ["name", "fx_volume", "benefit"]
-  
-  currency_saver:
-    template: "{name}, выгодный курс обмена валют и кешбэк до {benefit:,.0f} ₸. Откройте валютный счёт."
-    required_fields: ["name", "benefit"]
+  template: "{name}, вы часто меняете валюту ({fx_volume}). В приложении выгодный курс 24/7 без комиссии. Настроить обмен."
+  required_fields: ["name", "fx_volume"]
+  validation:
+    min_volume: 50000  # Минимум 50k объема
 
-cash_loan:
-  urgent_needs:
-    template: "{name}, нужны средства? Кредит наличными до {amount:,.0f} ₸ под выгодный процент. Оформить онлайн."
-    required_fields: ["name", "amount"]
-  
-  quick_approval:
-    template: "{name}, кредит наличными с решением за 5 минут. Сумма до {amount:,.0f} ₸. Подать заявку."
-    required_fields: ["name", "amount"]
+# Депозит Сберегательный
+deposit_savings:
+  template: "{name}, у вас остаются свободные средства. Сберегательный вклад под 16,5% годовых без возможности снятия. Открыть вклад."
+  required_fields: ["name"]
 
+# Депозит Накопительный
+deposit_accumulative:
+  template: "{name}, у вас остаются свободные средства. Накопительный вклад под 15,5% годовых с возможностью пополнения. Открыть вклад."
+  required_fields: ["name"]
+
+# Депозит Мультивалютный
+deposit_multicurrency:
+  template: "{name}, вы работаете с валютой. Мультивалютный депозит под 14,5% с доступом к средствам. Открыть депозит."
+  required_fields: ["name"]
+
+# Инвестиции
 investments:
-  start_investing:
-    template: "{name}, начните инвестировать с суммы от {min_amount:,.0f} ₸. Потенциальный доход — {benefit:,.0f} ₸. Открыть счёт."
-    required_fields: ["name", "min_amount", "benefit"]
-  
-  diversify:
-    template: "{name}, диверсифицируйте портфель. Инвестиционные продукты с доходностью до {rate}%. Начать инвестировать."
-    required_fields: ["name", "rate"]
+  template: "{name}, попробуйте инвестиции с низким порогом входа и без комиссий на старт. Открыть счёт."
+  required_fields: ["name"]
 
+# Золотые слитки
 gold:
-  stability:
-    template: "{name}, золото — надёжная защита капитала. Инвестируйте от {min_amount:,.0f} ₸. Открыть металлический счёт."
-    required_fields: ["name", "min_amount"]
-  
-  luxury_protection:
-    template: "{name}, защитите сбережения с помощью золота. Потенциальный доход — {benefit:,.0f} ₸. Открыть счёт."
-    required_fields: ["name", "benefit"]
+  template: "{name}, диверсифицируйте портфель золотыми слитками 999,9 пробы. Предзаказ в приложении. Узнать подробнее."
+  required_fields: ["name"]
 
-# Месяцы для локализации
-months:
+# Кредит наличными
+cash_loan:
+  template: "{name}, если нужны средства — кредит наличными до {loan_limit} от 12% годовых без залога. Узнать лимит."
+  required_fields: ["name", "loan_limit"]
+
+# Периоды для подстановки в шаблоны
+periods:
   1: "январе"
   2: "феврале"
   3: "марте"
@@ -109,8 +75,9 @@ months:
   11: "ноябре"
   12: "декабре"
 
-# Периоды
-periods:
-  3: "3 месяца"
-  6: "полгода"
-  12: "год"
+# Правила форматирования
+formatting:
+  decimal_separator: ","
+  thousands_separator: " "
+  currency_format: "{amount} ₸"
+  percentage_format: "{value}%"

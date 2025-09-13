@@ -14,11 +14,11 @@ from datetime import datetime
 sys.path.append(str(Path(__file__).parent))
 
 # Импортируем модули
-from etl_v2 import DataLoaderV2
+from etl import DataLoaderV2
 from features import FeatureEngineering
-from scoring_v2 import BenefitScoringV2
-from ranking_v2 import ProductRankerV2
-from compose_v3 import PushComposerV3
+from scoring import BenefitScoringV2
+from ranking import ProductRankerV2
+from compose import PushComposerV3
 from export import ResultExporter
 
 # Настройка логирования
@@ -36,8 +36,8 @@ logger = logging.getLogger(__name__)
 class RecommendationPipeline:
     """Основной пайплайн для генерации рекомендаций"""
     
-    def __init__(self, config_path: str = "conf/weights_v3.yaml",
-                 templates_path: str = "conf/templates_v3.yaml"):
+    def __init__(self, config_path: str = "conf/weights.yaml",
+                 templates_path: str = "conf/templates.yaml"):
         """
         Инициализация пайплайна
         

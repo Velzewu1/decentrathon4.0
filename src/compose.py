@@ -1,497 +1,388 @@
 """
-Модуль для генерации push-уведомлений из шаблонов
+Улучшенный модуль композиции push-уведомлений (версия 3.0)
+Исправлены баги с форматированием, расчетами и соответствием продуктов
 """
 import pandas as pd
 import numpy as np
-import yaml
-from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
 import logging
-import random
-import locale
-from datetime import datetime
+import re
+from typing import Dict, Any, Optional
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 
-class PushComposer:
-    """Класс для генерации push-уведомлений"""
+class FormattedNumber:
+    """Класс для правильного форматирования чисел с запятой и пробелами"""
     
-    def __init__(self, config_path: str = "conf/weights.yaml", 
-                 templates_path: str = "conf/templates.yaml"):
+    def __init__(self, value: float):
+        self.value = float(value) if pd.notna(value) else 0
+    
+    def __format__(self, format_spec: str) -> str:
+        if format_spec == ',.0f':
+            # Форматируем с пробелами как разделителями разрядов
+            formatted = f"{self.value:,.0f}"
+            # Заменяем запятые на пробелы для разрядов
+            formatted = formatted.replace(',', ' ')
+            return formatted
+        elif format_spec == ',.1f':
+            # Для процентов с одним знаком после запятой
+            formatted = f"{self.value:.1f}"
+            # Заменяем точку на запятую
+            formatted = formatted.replace('.', ',')
+            return formatted
+        else:
+            return str(self.value)
+
+
+class PushComposerV3:
+    """Улучшенный класс для генерации push-уведомлений"""
+    
+    def __init__(self, config_path: str = "conf/weights_v3.yaml", 
+                 templates_path: str = "conf/templates_v3.yaml"):
         """
-        Инициализация
+        Инициализация композера
         
         Args:
-            config_path: путь к файлу конфигурации
-            templates_path: путь к файлу с шаблонами
+            config_path: Путь к конфигурации
+            templates_path: Путь к шаблонам
         """
-        self.config = self._load_config(config_path)
-        self.templates = self._load_config(templates_path)
-        self.max_length = self.config['general']['push_max_length']
+        import yaml
         
-        # Настройка форматирования чисел
-        try:
-            locale.setlocale(locale.LC_ALL, 'ru_RU.UTF-8')
-        except:
-            try:
-                locale.setlocale(locale.LC_ALL, 'Russian_Russia.1251')
-            except:
-                pass  # Используем стандартную локаль
+        with open(config_path, 'r', encoding='utf-8') as f:
+            self.config = yaml.safe_load(f)
+        
+        with open(templates_path, 'r', encoding='utf-8') as f:
+            self.templates = yaml.safe_load(f)
     
-    def _load_config(self, config_path: str) -> Dict[str, Any]:
-        """Загрузка конфигурации из YAML файла"""
-        config_file = Path(config_path)
-        if not config_file.exists():
-            raise FileNotFoundError(f"Файл не найден: {config_path}")
-        
-        with open(config_file, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f)
-    
-    def _format_currency(self, amount: float) -> str:
-        """
-        Форматирование суммы в валюте
-        
-        Args:
-            amount: сумма
-            
-        Returns:
-            Отформатированная строка
-        """
-        # Форматируем число с пробелами между разрядами
-        formatted = f"{amount:,.0f}".replace(",", " ")
-        return formatted
-    
-    def _get_month_name(self, month_num: int) -> str:
-        """
-        Получение названия месяца в предложном падеже
-        
-        Args:
-            month_num: номер месяца (1-12)
-            
-        Returns:
-            Название месяца
-        """
-        return self.templates['months'].get(month_num, 'этом месяце')
-    
-    def _get_period_name(self, months: int) -> str:
-        """
-        Получение названия периода
-        
-        Args:
-            months: количество месяцев
-            
-        Returns:
-            Название периода
-        """
-        return self.templates['periods'].get(months, f'{months} месяцев')
-    
-    def _select_template(self, product: str, features: pd.Series) -> Tuple[str, Dict[str, Any]]:
-        """
-        Выбор подходящего шаблона для продукта
-        
-        Args:
-            product: название продукта
-            features: признаки клиента
-            
-        Returns:
-            Кортеж (шаблон, требуемые поля)
-        """
-        # Маппинг продуктов на ключи в шаблонах
-        product_mapping = {
-            'Карта для путешествий': 'travel_card',
-            'Премиальная карта': 'premium_card',
-            'Кредитная карта': 'credit_card',
-            'Депозит': 'deposits',
-            'Мультивалютный депозит': 'deposits',
-            'Сберегательный депозит': 'deposits',
-            'Накопительный депозит': 'deposits',
-            'Валютный счет': 'fx',
-            'Кредит наличными': 'cash_loan',
-            'Инвестиции': 'investments',
-            'Золото': 'gold'
-        }
-        
-        template_key = product_mapping.get(product)
-        if not template_key:
-            logger.warning(f"Шаблон не найден для продукта: {product}")
-            return None, None
-        
-        product_templates = self.templates.get(template_key, {})
-        
-        # Выбираем подходящий шаблон на основе доступных данных
-        if template_key == 'travel_card':
-            if features.get('spend_Такси', 0) > 0:
-                return product_templates.get('taxi_focus'), 'taxi_focus'
-            elif features.get('spend_Отели', 0) > 0:
-                return product_templates.get('hotel_focus'), 'hotel_focus'
-            else:
-                return product_templates.get('travel_focus'), 'travel_focus'
-        
-        elif template_key == 'premium_card':
-            if features.get('spend_Рестораны', 0) > 10000:
-                return product_templates.get('restaurant_lover'), 'restaurant_lover'
-            elif features.get('avg_monthly_balance', 0) > 300000:
-                return product_templates.get('high_balance'), 'high_balance'
-            else:
-                return product_templates.get('luxury_spender'), 'luxury_spender'
-        
-        elif template_key == 'credit_card':
-            if features.get('top_category_1', ''):
-                return product_templates.get('top_categories'), 'top_categories'
-            elif features.get('spend_Онлайн-сервисы', 0) > 0:
-                return product_templates.get('online_services'), 'online_services'
-            else:
-                return product_templates.get('installments'), 'installments'
-        
-        elif template_key == 'deposits':
-            deposit_type = features.get('deposit_type', 'Сберегательный депозит')
-            if 'Мультивалютный' in deposit_type:
-                return product_templates.get('multicurrency'), 'multicurrency'
-            elif 'Накопительный' in deposit_type:
-                return product_templates.get('accumulative'), 'accumulative'
-            else:
-                return product_templates.get('savings'), 'savings'
-        
-        elif template_key == 'fx':
-            if features.get('fx_volume', 0) > 100000:
-                return product_templates.get('active_trader'), 'active_trader'
-            else:
-                return product_templates.get('currency_saver'), 'currency_saver'
-        
-        elif template_key == 'cash_loan':
-            if features.get('outflow_inflow_ratio', 0) > 2:
-                return product_templates.get('urgent_needs'), 'urgent_needs'
-            else:
-                return product_templates.get('quick_approval'), 'quick_approval'
-        
-        elif template_key == 'investments':
-            if features.get('free_funds', 0) > 500000:
-                return product_templates.get('diversify'), 'diversify'
-            else:
-                return product_templates.get('start_investing'), 'start_investing'
-        
-        elif template_key == 'gold':
-            if features.get('avg_monthly_balance', 0) > 1000000:
-                return product_templates.get('luxury_protection'), 'luxury_protection'
-            else:
-                return product_templates.get('stability'), 'stability'
-        
-        # Возвращаем первый доступный шаблон
-        if product_templates:
-            first_key = list(product_templates.keys())[0]
-            return product_templates[first_key], first_key
-        
-        return None, None
-    
-    def _prepare_template_data(self, features: pd.Series, details: pd.Series, 
-                               product: str, benefit: float) -> Dict[str, Any]:
-        """
-        Подготовка данных для заполнения шаблона
-        
-        Args:
-            features: признаки клиента
-            details: детали продукта
-            product: название продукта
-            benefit: benefit score
-            
-        Returns:
-            Словарь с данными для шаблона
-        """
-        # Функция для создания форматированной строки с пробелами
-        def format_with_spaces(value):
-            """Создаем класс-обертку для числа с кастомным форматированием"""
-            class FormattedNumber:
-                def __init__(self, val):
-                    self.val = val
-                    
-                def __format__(self, format_spec):
-                    # Форматируем число
-                    formatted = format(self.val, format_spec.replace(',', ''))
-                    # Заменяем точку на пробел для разделителя тысяч
-                    if '.' not in formatted:
-                        # Добавляем пробелы для разделения тысяч
-                        parts = []
-                        for i, char in enumerate(reversed(formatted)):
-                            if i > 0 and i % 3 == 0:
-                                parts.append(' ')
-                            parts.append(char)
-                        return ''.join(reversed(parts))
-                    return formatted
-            
-            return FormattedNumber(value)
-        
-        # Базовые данные
-        data = {
-            'name': features.get('name', 'Клиент'),
-            'benefit': format_with_spaces(benefit),
-            'month': self._get_month_name(datetime.now().month - 1),  # предыдущий месяц
-            'period': self._get_period_name(3),
-        }
-        
-        # Добавляем специфичные данные для каждого продукта
-        if 'Карта для путешествий' in product:
-            data.update({
-                'n_taxi': int(details.get('travel_n_taxi', 0)),
-                'sum_taxi': format_with_spaces(details.get('travel_sum_taxi', 0)),
-                'travel_spend': format_with_spaces(details.get('travel_total_spend', 0)),
-                'hotel_spend': format_with_spaces(features.get('spend_Отели', 0)),
-            })
-        
-        elif 'Премиальная' in product:
-            data.update({
-                'percent': details.get('premium_percent', 2),
-                'restaurant_spend': format_with_spaces(details.get('premium_restaurant_spend', 0)),
-            })
-        
-        elif 'Кредитная' in product:
-            data.update({
-                'cat1': details.get('credit_cat1', 'Покупки'),
-                'cat2': details.get('credit_cat2', 'Продукты'),
-                'cat3': details.get('credit_cat3', 'Транспорт'),
-            })
-        
-        elif 'Депозит' in product or 'депозит' in product.lower():
-            data.update({
-                'rate': details.get('deposit_rate', 15),
-            })
-        
-        elif 'Валютный' in product:
-            data.update({
-                'fx_volume': format_with_spaces(details.get('fx_volume', 0)),
-            })
-        
-        elif 'Кредит' in product:
-            data.update({
-                'amount': format_with_spaces(details.get('loan_amount', 100000)),
-            })
-        
-        elif 'Инвестиции' in product:
-            data.update({
-                'min_amount': format_with_spaces(details.get('investment_min_amount', 100000)),
-                'rate': details.get('investment_rate', 15),
-            })
-        
-        elif 'Золото' in product:
-            data.update({
-                'min_amount': format_with_spaces(details.get('gold_min_amount', 50000)),
-            })
-        
-        return data
-    
-    def compose_push(self, features: pd.Series, details: pd.Series, 
-                    product: str, benefit: float) -> str:
-        """
-        Генерация push-уведомления для клиента
-        
-        Args:
-            features: признаки клиента
-            details: детали продукта
-            product: название продукта
-            benefit: benefit score
-            
-        Returns:
-            Текст push-уведомления
-        """
-        # Выбираем шаблон
-        template_info, template_key = self._select_template(product, features)
-        
-        if not template_info:
-            # Fallback шаблон
-            name = features.get('name', 'Клиент')
-            if name == '':
-                name = 'Клиент'
-            return f"{name}, откройте {product} и получите выгоду до {self._format_currency(benefit)} ₸. Оформить сейчас."
-        
-        # Подготавливаем данные
-        template_data = self._prepare_template_data(features, details, product, benefit)
-        
-        # Заполняем шаблон
-        try:
-            push_text = template_info['template'].format(**template_data)
-        except (KeyError, ValueError) as e:
-            logger.warning(f"Ошибка форматирования шаблона {template_key}: {e}")
-            # Используем fallback
-            name = features.get('name', 'Клиент')
-            if name == '':
-                name = 'Клиент'
-            return f"{name}, откройте {product} и получите выгоду до {self._format_currency(benefit)} ₸. Оформить сейчас."
-        
-        # Проверяем длину
-        if len(push_text) > self.max_length:
-            logger.warning(f"Push превышает максимальную длину: {len(push_text)} > {self.max_length}")
-            # Пробуем укоротить
-            push_text = self._shorten_push(push_text)
-        
-        # Валидация
-        push_text = self._validate_push(push_text)
-        
-        return push_text
-    
-    def _shorten_push(self, push_text: str) -> str:
-        """
-        Укорачивание push-уведомления
-        
-        Args:
-            push_text: исходный текст
-            
-        Returns:
-            Укороченный текст
-        """
-        # Удаляем лишние пробелы
-        push_text = ' '.join(push_text.split())
-        
-        # Если все еще длинный, обрезаем и добавляем CTA
-        if len(push_text) > self.max_length:
-            push_text = push_text[:self.max_length-20] + '... Открыть сейчас.'
-        
-        return push_text
-    
-    def _validate_push(self, push_text: str) -> str:
-        """
-        Валидация push-уведомления согласно правилам
-        
-        Args:
-            push_text: текст уведомления
-            
-        Returns:
-            Валидированный текст
-        """
-        # Проверка на CAPS LOCK
-        if push_text.isupper():
-            push_text = push_text.capitalize()
-        
-        # Проверка на множественные восклицательные знаки
-        while '!!' in push_text:
-            push_text = push_text.replace('!!', '!')
-        
-        # Проверка на количество восклицательных знаков
-        if push_text.count('!') > 1:
-            # Оставляем только первый
-            parts = push_text.split('!')
-            push_text = parts[0] + '!' + ''.join(parts[1:]).replace('!', '.')
-        
-        return push_text
-    
-    def generate_all_pushes(self, features: pd.DataFrame, details: pd.DataFrame,
-                           ranked_products: pd.DataFrame) -> pd.DataFrame:
+    def compose_push_for_clients(self, 
+                                recommendations_df: pd.DataFrame,
+                                features_df: pd.DataFrame,
+                                details_df: pd.DataFrame) -> pd.DataFrame:
         """
         Генерация push-уведомлений для всех клиентов
         
         Args:
-            features: DataFrame с признаками клиентов
-            details: DataFrame с деталями продуктов
-            ranked_products: DataFrame с ранжированными продуктами
+            recommendations_df: DataFrame с рекомендациями
+            features_df: DataFrame с признаками
+            details_df: DataFrame с деталями продуктов
             
         Returns:
             DataFrame с push-уведомлениями
         """
         logger.info("Генерация push-уведомлений для всех клиентов")
         
-        result_list = []
+        results = []
         
-        # Получаем основной продукт для каждого клиента (rank=1)
-        main_products = ranked_products[ranked_products['rank'] == 1].copy()
-        
-        for idx, row in main_products.iterrows():
-            client_code = row['client_code']
-            product = row['product']
-            benefit = row['benefit']
+        for _, rec in recommendations_df.iterrows():
+            client_code = rec['client_code']
+            product = rec['product']
+            benefit = rec.get('benefit', 0)
             
-            # Если это депозит, используем конкретный тип
-            if product == 'Депозит' and 'deposit_type' in row:
-                deposit_type = row['deposit_type']
-                if deposit_type:
-                    # Добавляем тип депозита в features для правильного выбора шаблона
-                    client_features = features[features['client_code'] == client_code].iloc[0].copy()
-                    client_features['deposit_type'] = deposit_type
-                else:
-                    client_features = features[features['client_code'] == client_code].iloc[0]
-            else:
-                client_features = features[features['client_code'] == client_code].iloc[0]
+            # Получаем признаки клиента
+            client_features = features_df[features_df['client_code'] == client_code]
+            if len(client_features) == 0:
+                logger.warning(f"Не найдены признаки для клиента {client_code}")
+                continue
             
-            client_details = details[details['client_code'] == client_code].iloc[0]
+            features = client_features.iloc[0]
+            
+            # Получаем детали продукта
+            client_details = details_df[details_df['client_code'] == client_code] if len(details_df) > 0 else pd.DataFrame()
+            details = client_details.iloc[0] if len(client_details) > 0 else pd.Series()
             
             # Генерируем push
-            push_text = self.compose_push(client_features, client_details, product, benefit)
+            push = self.compose_push(product, features, details, benefit)
             
-            result_list.append({
-                'client_code': client_code,
-                'product': product,
-                'push_notification': push_text
-            })
+            if push:  # Только если push успешно сгенерирован
+                results.append({
+                    'client_code': client_code,
+                    'product': product,
+                    'push_notification': push
+                })
+            else:
+                logger.warning(f"Не удалось сгенерировать push для клиента {client_code}, продукт {product}")
         
-        result_df = pd.DataFrame(result_list)
+        logger.info(f"Сгенерировано {len(results)} push-уведомлений")
+        return pd.DataFrame(results)
+    
+    def compose_push(self, 
+                     product: str, 
+                     features: pd.Series, 
+                     details: pd.Series = None,
+                     benefit: float = 0) -> Optional[str]:
+        """
+        Генерация push-уведомления для продукта
         
-        logger.info(f"Сгенерировано {len(result_df)} push-уведомлений")
+        Args:
+            product: Название продукта
+            features: Признаки клиента
+            details: Детали продукта
+            benefit: Benefit score
+            
+        Returns:
+            Текст push-уведомления или None если не удалось сгенерировать
+        """
+        if details is None:
+            details = pd.Series()
         
-        return result_df
-
-
-def main():
-    """Тестовый запуск генерации push-уведомлений"""
+        try:
+            # Нормализуем название продукта
+            product_key = self._normalize_product_name(product)
+            
+            if product_key == 'travel_card':
+                return self._compose_travel_card_push(features, details, benefit)
+            elif product_key == 'premium_card':
+                return self._compose_premium_card_push(features, details)
+            elif product_key == 'credit_card':
+                return self._compose_credit_card_push(features, details)
+            elif product_key == 'fx':
+                return self._compose_fx_push(features, details)
+            elif product_key in ['deposit_savings', 'deposit_accumulative', 'deposit_multicurrency']:
+                return self._compose_deposit_push(product_key, features, details)
+            elif product_key == 'investments':
+                return self._compose_investments_push(features, details)
+            elif product_key == 'gold':
+                return self._compose_gold_push(features, details)
+            elif product_key == 'cash_loan':
+                return self._compose_cash_loan_push(features, details)
+            else:
+                logger.warning(f"Неизвестный продукт: {product}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Ошибка при генерации push для продукта {product}: {e}")
+            return None
     
-    # Создаем тестовые данные
-    test_features = pd.DataFrame({
-        'client_code': [1, 2, 3],
-        'name': ['Рамазан', 'Алия', 'Петр'],
-        'status': ['Премиальный клиент', 'Студент', 'Зарплатный клиент'],
-        'avg_monthly_balance': [500000, 50000, 200000],
-        'spend_Такси': [27400, 3500, 8000],
-        'spend_Рестораны': [35000, 0, 12000],
-        'spend_Отели': [80000, 0, 60000],
-        'spend_Путешествия': [150000, 0, 100000],
-        'spend_Онлайн-сервисы': [3000, 5000, 0],
-        'fx_volume': [150000, 31200, 232000],
-        'outflow_inflow_ratio': [float('inf'), 2.57, float('inf')],
-        'top_category_1': ['Путешествия', 'Продукты', 'Путешествия'],
-        'top_category_2': ['Отели', 'Образование', 'Отели'],
-        'top_category_3': ['Рестораны', 'Онлайн-сервисы', 'Продукты'],
-        'deposit_type': ['Мультивалютный депозит', 'Сберегательный депозит', 'Мультивалютный депозит']
-    })
+    def _normalize_product_name(self, product: str) -> str:
+        """Нормализация названия продукта к ключу в шаблонах"""
+        product_mapping = {
+            'Карта для путешествий': 'travel_card',
+            'Премиальная карта': 'premium_card',
+            'Кредитная карта': 'credit_card',
+            'Обмен валют': 'fx',
+            'Депозит Сберегательный': 'deposit_savings',
+            'Депозит Накопительный': 'deposit_accumulative', 
+            'Депозит Мультивалютный': 'deposit_multicurrency',
+            'Депозит': 'deposit_savings',  # По умолчанию сберегательный
+            'Инвестиции': 'investments',
+            'Золотые слитки': 'gold',
+            'Кредит наличными': 'cash_loan'
+        }
+        return product_mapping.get(product, product.lower().replace(' ', '_'))
     
-    test_details = pd.DataFrame({
-        'client_code': [1, 2, 3],
-        'travel_n_taxi': [12, 2, 4],
-        'travel_sum_taxi': [27400, 3500, 8000],
-        'travel_total_spend': [266400, 3500, 168000],
-        'premium_percent': [4, 2, 3],
-        'premium_restaurant_spend': [35000, 0, 12000],
-        'credit_cat1': ['Путешествия', 'Продукты', 'Путешествия'],
-        'credit_cat2': ['Отели', 'Образование', 'Отели'],
-        'credit_cat3': ['Рестораны', 'Онлайн-сервисы', 'Продукты'],
-        'deposit_rate': [14.5, 16.5, 14.5],
-        'fx_volume': [150000, 31200, 232000],
-        'loan_amount': [362000, 23500, 195000],
-        'investment_min_amount': [100000, 100000, 100000],
-        'investment_rate': [15, 15, 15],
-        'gold_min_amount': [50000, 50000, 50000]
-    })
+    def _compose_travel_card_push(self, features: pd.Series, details: pd.Series, benefit: float) -> Optional[str]:
+        """Генерация push для карты путешествий"""
+        name = features.get('name', 'Клиент')
+        
+        # Получаем данные о тратах на такси и путешествия
+        taxi_spend = features.get('spend_Такси', 0)
+        travel_spend = features.get('spend_Путешествия', 0)
+        
+        total_spend = taxi_spend + travel_spend
+        
+        # Проверяем минимальный порог трат
+        min_threshold = self.config.get('travel_card', {}).get('min_spend_threshold', 1000)
+        if total_spend < min_threshold:
+            logger.debug(f"Траты на такси/путешествия слишком малы: {total_spend}")
+            return None
+        
+        # Рассчитываем реальный кешбэк
+        cashback_rate = self.config.get('travel_card', {}).get('cashback_rate', 0.04)
+        real_cashback = total_spend * cashback_rate
+        
+        # Проверяем что кешбэк реалистичен
+        max_cashback = total_spend * 0.04  # Не больше 4% от трат
+        if real_cashback > max_cashback or real_cashback <= 0:
+            logger.debug(f"Нереалистичный кешбэк: {real_cashback} при тратах {total_spend}")
+            return None
+        
+        # Определяем количество поездок (примерно)
+        avg_taxi_trip = 1500  # Средняя поездка на такси
+        taxi_count = max(1, int(taxi_spend / avg_taxi_trip)) if taxi_spend > 0 else 0
+        
+        template = self.templates['travel_card']['template']
+        
+        try:
+            push = template.format(
+                name=name,
+                month="августе",
+                taxi_count=taxi_count,
+                taxi_amount=self._format_amount(total_spend),
+                cashback_amount=self._format_amount(real_cashback)
+            )
+            return self._validate_and_fix_push(push)
+        except Exception as e:
+            logger.error(f"Ошибка форматирования push для карты путешествий: {e}")
+            return None
     
-    test_ranked = pd.DataFrame({
-        'client_code': [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3],
-        'rank': [1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4],
-        'product': ['Депозит', 'Премиальная карта', 'Карта для путешествий', 'Инвестиции',
-                   'Депозит', 'Кредит наличными', 'Премиальная карта', 'Валютный счет',
-                   'Депозит', 'Премиальная карта', 'Карта для путешествий', 'Валютный счет'],
-        'benefit': [94250, 18640, 9560, 5000, 8550, 2350, 1155, 312, 36000, 7800, 6720, 2320],
-        'deposit_type': ['Мультивалютный депозит', None, None, None,
-                         'Сберегательный депозит', None, None, None,
-                         'Мультивалютный депозит', None, None, None]
-    })
+    def _compose_premium_card_push(self, features: pd.Series, details: pd.Series) -> str:
+        """Генерация push для премиальной карты"""
+        name = features.get('name', 'Клиент')
+        restaurant_spend = features.get('spend_Кафе и рестораны', 0)
+        balance = features.get('avg_monthly_balance_KZT', 0)
+        
+        # Выбираем подходящий шаблон
+        if restaurant_spend > 50000:  # Часто ходит в рестораны
+            template = self.templates['premium_card']['restaurant_lover']['template']
+            monthly_restaurant = restaurant_spend / 3  # За месяц
+            
+            push = template.format(
+                name=name,
+                restaurant_amount=self._format_amount(monthly_restaurant)
+            )
+        else:  # Высокий баланс
+            template = self.templates['premium_card']['high_balance']['template']
+            push = template.format(name=name)
+        
+        return self._validate_and_fix_push(push)
     
-    # Генерируем push-уведомления
-    composer = PushComposer()
-    pushes_df = composer.generate_all_pushes(test_features, test_details, test_ranked)
+    def _compose_credit_card_push(self, features: pd.Series, details: pd.Series) -> str:
+        """Генерация push для кредитной карты"""
+        name = features.get('name', 'Клиент')
+        
+        # Получаем топ-3 категории
+        top_cats = []
+        for i in range(1, 4):
+            cat = features.get(f'top_category_{i}', '')
+            if cat and cat not in ['Оплата картой', 'Переводы', 'Снятие наличных']:
+                top_cats.append(cat)
+        
+        # Дополняем до 3 категорий если нужно
+        default_cats = ['Продукты питания', 'Кафе и рестораны', 'Такси']
+        while len(top_cats) < 3:
+            for cat in default_cats:
+                if cat not in top_cats:
+                    top_cats.append(cat)
+                    break
+            if len(top_cats) >= 3:
+                break
+        
+        template = self.templates['credit_card']['template']
+        push = template.format(
+            name=name,
+            top_category_1=top_cats[0] if len(top_cats) > 0 else 'Продукты питания',
+            top_category_2=top_cats[1] if len(top_cats) > 1 else 'Кафе и рестораны', 
+            top_category_3=top_cats[2] if len(top_cats) > 2 else 'Такси'
+        )
+        
+        return self._validate_and_fix_push(push)
     
-    print("\nСгенерированные push-уведомления:")
-    for idx, row in pushes_df.iterrows():
-        print(f"\nКлиент {row['client_code']} - {row['product']}:")
-        print(f"  {row['push_notification']}")
-        print(f"  Длина: {len(row['push_notification'])} символов")
+    def _compose_fx_push(self, features: pd.Series, details: pd.Series) -> Optional[str]:
+        """Генерация push для обмена валют"""
+        name = features.get('name', 'Клиент')
+        fx_volume = features.get('fx_volume', 0)
+        
+        # Проверяем минимальный объем
+        min_volume = self.config.get('fx', {}).get('min_volume_threshold', 50000)
+        if fx_volume < min_volume:
+            logger.debug(f"FX объем слишком мал: {fx_volume}")
+            return None
+        
+        template = self.templates['fx']['template']
+        push = template.format(
+            name=name,
+            fx_volume=self._format_amount(fx_volume)
+        )
+        
+        return self._validate_and_fix_push(push)
+    
+    def _compose_deposit_push(self, product_key: str, features: pd.Series, details: pd.Series) -> str:
+        """Генерация push для депозитов"""
+        name = features.get('name', 'Клиент')
+        template = self.templates[product_key]['template']
+        
+        push = template.format(name=name)
+        return self._validate_and_fix_push(push)
+    
+    def _compose_investments_push(self, features: pd.Series, details: pd.Series) -> str:
+        """Генерация push для инвестиций"""
+        name = features.get('name', 'Клиент')
+        template = self.templates['investments']['template']
+        
+        push = template.format(name=name)
+        return self._validate_and_fix_push(push)
+    
+    def _compose_gold_push(self, features: pd.Series, details: pd.Series) -> str:
+        """Генерация push для золотых слитков"""
+        name = features.get('name', 'Клиент')
+        template = self.templates['gold']['template']
+        
+        push = template.format(name=name)
+        return self._validate_and_fix_push(push)
+    
+    def _compose_cash_loan_push(self, features: pd.Series, details: pd.Series) -> str:
+        """Генерация push для кредита наличными"""
+        name = features.get('name', 'Клиент')
+        template = self.templates['cash_loan']['template']
+        
+        # Определяем лимит кредита на основе доходов
+        inflows = features.get('inflows', 0)
+        loan_limit = min(inflows * 2, 1000000)  # До 2х доходов, но не больше 1 млн
+        
+        push = template.format(
+            name=name,
+            loan_limit=self._format_amount(loan_limit)
+        )
+        
+        return self._validate_and_fix_push(push)
+    
+    def _format_amount(self, amount: float) -> str:
+        """Форматирование суммы с правильными разделителями"""
+        if pd.isna(amount) or amount == 0:
+            return "0 ₸"
+        
+        formatted_num = FormattedNumber(amount)
+        return f"{formatted_num:,.0f} ₸"
+    
+    def _format_percentage(self, value: float) -> str:
+        """Форматирование процентов с запятой"""
+        formatted_num = FormattedNumber(value)
+        return f"{formatted_num:,.1f}%"
+    
+    def _validate_and_fix_push(self, push: str) -> str:
+        """Валидация и исправление push-уведомления"""
+        if not push:
+            return ""
+        
+        # Исправляем название карты на консистентное
+        push = push.replace('Премиум-карта', 'Премиальная карта')
+        push = push.replace('премиум-карта', 'премиальная карта')
+        
+        # Исправляем проценты с точки на запятую
+        push = re.sub(r'(\d+)\.(\d+)%', r'\1,\2%', push)
+        
+        # Убираем множественные пробелы
+        push = re.sub(r'\s+', ' ', push)
+        
+        # Обрезаем до максимальной длины
+        max_length = 220
+        if len(push) > max_length:
+            push = push[:max_length-3] + '...'
+        
+        return push.strip()
 
 
 if __name__ == "__main__":
-    main()
+    # Тестирование
+    composer = PushComposerV3()
+    
+    # Тестовые данные
+    test_features = pd.Series({
+        'name': 'Тестовый Клиент',
+        'spend_Такси': 50000,
+        'spend_Путешествия': 30000,
+        'spend_Кафе и рестораны': 75000,
+        'top_category_1': 'Продукты питания',
+        'top_category_2': 'Кафе и рестораны',
+        'top_category_3': 'Такси'
+    })
+    
+    # Тест карты путешествий
+    push = composer.compose_push('Карта для путешествий', test_features, benefit=3200)
+    print(f"Travel card push: {push}")
+    
+    # Тест премиальной карты
+    push = composer.compose_push('Премиальная карта', test_features)
+    print(f"Premium card push: {push}")
+    
+    print("Тестирование завершено!")

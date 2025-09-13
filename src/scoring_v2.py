@@ -418,13 +418,14 @@ class BenefitScoringV2:
         
         return 1.0
     
-    def _is_product_available(self, client_status: str, product: str) -> bool:
+    def _is_product_available(self, client_status: str, product: str, features: pd.Series = None) -> bool:
         """
-        Проверка доступности продукта для клиента по статусу
+        Проверка доступности продукта для клиента по статусу и поведению
         
         Args:
             client_status: Статус клиента
             product: Название продукта
+            features: Признаки клиента (для умной логики)
             
         Returns:
             True если продукт доступен
@@ -434,19 +435,29 @@ class BenefitScoringV2:
         
         # Ограничения для студентов
         if 'студент' in status_lower:
-            restricted = ['Премиальная карта', 'Кредит наличными', 'Золотые слитки']
+            restricted = ['Кредит наличными', 'Золотые слитки']  # Убираем премиальную карту из запрета
             if product in restricted:
                 return False
         
-        # Ограничения для стандартных клиентов
-        if 'стандартный' in status_lower:
-            if product == 'Премиальная карта':
-                return False
-        
-        # Премиальные продукты требуют премиальный статус
+        # Умная логика для премиальной карты
         if product == 'Премиальная карта':
-            if 'премиальный' not in status_lower and 'вип' not in status_lower:
-                return False
+            if 'премиальный' in status_lower or 'вип' in status_lower:
+                return True  # Всегда доступна для VIP
+            
+            # Для других статусов проверяем поведение
+            if features is not None:
+                balance = features.get('avg_monthly_balance_KZT', 0)
+                restaurant_spend = features.get('spend_Кафе и рестораны', 0)
+                cosmetics_spend = features.get('spend_Косметика и парфюмерия', 0)
+                total_spend = features.get('total_spend', 1)
+                
+                # Разрешаем если высокий баланс ИЛИ высокие траты на премиальные категории
+                premium_spend_share = (restaurant_spend + cosmetics_spend) / total_spend if total_spend > 0 else 0
+                
+                if balance > 500000 or premium_spend_share > 0.2:  # 20% трат на премиальные категории
+                    return True
+            
+            return False  # Иначе недоступна
         
         return True
     
@@ -495,8 +506,8 @@ class BenefitScoringV2:
                 client_status = row.get('status', 'Стандартный клиент')
                 client_age = row.get('age', 35)
                 
-                # Проверяем доступность
-                if not self._is_product_available(client_status, product_name):
+                # Проверяем доступность (передаем features для умной логики)
+                if not self._is_product_available(client_status, product_name, row):
                     benefits.at[idx, f'benefit_{product_name}'] = 0
                 else:
                     # Применяем возрастной множитель

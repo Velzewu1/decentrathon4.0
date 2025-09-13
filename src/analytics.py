@@ -321,9 +321,9 @@ if __name__ == "__main__":
     # Тестовый запуск
     import sys
     sys.path.append('src')
-    from etl_v2 import DataLoaderV2
+    from etl import DataLoaderV2
     from features import FeatureEngineering
-    from scoring_v2 import BenefitScoringV2
+    from scoring import BenefitScoringV2
     
     # Загружаем данные
     loader = DataLoaderV2()
