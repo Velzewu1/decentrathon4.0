@@ -1,0 +1,99 @@
+# Конфигурация весов и лимитов для расчета benefit score
+# Все суммы в тенге (KZT)
+
+# Курсы валют для конвертации
+currency_rates:
+  USD: 480
+  EUR: 520
+  KZT: 1
+
+# Параметры для Travel Card
+travel_card:
+  cashback_rate: 0.04  # 4% кешбэк
+  cap: 100000  # максимальный benefit
+  categories:
+    - "Путешествия"
+    - "Такси"
+    - "Отели"
+    - "Билеты"
+
+# Параметры для Premium Card
+premium_card:
+  tier_thresholds:  # пороги для уровней кешбэка (в тенге)
+    tier1: 0
+    tier2: 500000
+    tier3: 1000000
+    tier4: 2000000
+  tier_cashback_rates:
+    tier1: 0.02  # 2%
+    tier2: 0.025  # 2.5%
+    tier3: 0.03  # 3%
+    tier4: 0.04  # 4%
+  special_cashback_rate: 0.04  # 4% на специальные категории
+  special_categories:
+    - "Рестораны"
+    - "Ювелирные изделия"
+    - "Косметика и парфюмерия"
+  saved_fees_rate: 0.01  # 1% экономия на комиссиях
+  saved_fees_cap: 30000
+  cashback_cap: 100000
+
+# Параметры для Credit Card
+credit_card:
+  top_categories_cashback: 0.1  # 10% на топ-3 категории
+  online_cashback: 0.1  # 10% на онлайн-сервисы
+  cap: 100000
+  online_categories:
+    - "Онлайн-сервисы"
+    - "Едим дома"
+    - "Смотрим дома"
+    - "Играем дома"
+  activation_types:  # типы транзакций, активирующие кредитную карту
+    - "installment_payment_out"
+    - "cc_repayment_out"
+
+# Параметры для FX
+fx:
+  cashback_rate: 0.01  # 1% на валютные операции
+
+# Параметры для Cash Loan
+cash_loan:
+  outflow_multiplier: 1.5  # коэффициент для проверки превышения расходов
+  balance_threshold: 50000  # порог баланса
+  benefit_rate: 0.1  # 10% от разницы
+
+# Параметры для депозитов
+deposits:
+  multicurrency:
+    rate: 0.145  # 14.5% годовых
+  savings:
+    rate: 0.165  # 16.5% годовых
+  accumulative:
+    rate: 0.155  # 15.5% годовых
+
+# Параметры для инвестиций
+investments:
+  free_funds_threshold: 100000
+  benefit_rate: 0.01  # 1% от баланса
+
+# Параметры для золота
+gold:
+  benefit_rate: 0.005  # 0.5% от баланса
+  balance_threshold: 100000  # минимальный баланс для предложения
+
+# Приоритеты продуктов (при равных benefit)
+product_priority:
+  1: "Премиальная карта"
+  2: "Карта для путешествий"
+  3: "Кредитная карта"
+  4: "Депозит"
+  5: "Валютный счет"
+  6: "Инвестиции"
+  7: "Золото"
+  8: "Кредит наличными"
+
+# Общие параметры
+general:
+  aggregation_months: 3  # количество месяцев для агрегации
+  push_max_length: 220  # максимальная длина push-уведомления
+  top_products_count: 4  # количество топ-продуктов для рекомендации
