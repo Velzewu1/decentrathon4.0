@@ -17,8 +17,8 @@ sys.path.append(str(Path(__file__).parent))
 from etl_v2 import DataLoaderV2
 from features import FeatureEngineering
 from scoring_v2 import BenefitScoringV2
-from ranking import ProductRanking
-from compose_v2 import PushComposerV2
+from ranking_v2 import ProductRankerV2
+from compose_v3 import PushComposerV3
 from export import ResultExporter
 
 # Настройка логирования
@@ -36,8 +36,8 @@ logger = logging.getLogger(__name__)
 class RecommendationPipeline:
     """Основной пайплайн для генерации рекомендаций"""
     
-    def __init__(self, config_path: str = "conf/weights_v2.yaml",
-                 templates_path: str = "conf/templates_v2.yaml"):
+    def __init__(self, config_path: str = "conf/weights_v3.yaml",
+                 templates_path: str = "conf/templates_v3.yaml"):
         """
         Инициализация пайплайна
         
@@ -50,8 +50,8 @@ class RecommendationPipeline:
         self.data_loader = DataLoaderV2(config_path)
         self.feature_eng = FeatureEngineering(config_path)
         self.scoring = BenefitScoringV2(config_path)
-        self.ranking = ProductRanking(config_path)
-        self.composer = PushComposerV2(config_path, templates_path)
+        self.ranking = ProductRankerV2(config_path)
+        self.composer = PushComposerV3(config_path, templates_path)
         self.exporter = ResultExporter()
         
         logger.info("Пайплайн инициализирован успешно")
@@ -128,13 +128,13 @@ class RecommendationPipeline:
             
             # Шаг 5: Ранжирование продуктов
             logger.info("\n[5/7] Ранжирование и выбор топ-4 продуктов...")
-            ranked_products = self.ranking.rank_products(benefits)
+            ranked_products = self.ranking.rank_products_for_clients(benefits, features, top_n=1)
             results['total_recommendations'] = len(ranked_products)
             logger.info(f"✓ Создано {len(ranked_products)} рекомендаций")
             
             # Шаг 6: Генерация push-уведомлений
             logger.info("\n[6/7] Генерация push-уведомлений...")
-            recommendations = self.composer.generate_all_pushes(features, details, ranked_products)
+            recommendations = self.composer.compose_push_for_clients(ranked_products, features, details)
             results['pushes_generated'] = len(recommendations)
             logger.info(f"✓ Сгенерировано {len(recommendations)} push-уведомлений")
             

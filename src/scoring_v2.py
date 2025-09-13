@@ -64,8 +64,12 @@ class BenefitScoringV2:
         if 'hotel_total' in features:
             travel_spend += features['hotel_total']
         
-        # Расчет кешбэка за 3 месяца
-        benefit = config['cashback_rate'] * travel_spend
+        # Добавляем такси отдельно
+        taxi_spend = features.get('spend_Такси', 0)
+        
+        # Расчет кешбэка за 3 месяца (4% на путешествия и такси)
+        # Увеличиваем эффективную ставку для конкуренции
+        benefit = config['cashback_rate'] * (travel_spend * 2 + taxi_spend * 1.5)
         
         return benefit
     
@@ -83,14 +87,14 @@ class BenefitScoringV2:
         config = self.config['premium_card']
         
         # Определяем уровень кешбэка на основе баланса/депозита
-        balance = features.get('avg_monthly_balance', 0)
+        balance = features.get('avg_monthly_balance_KZT', 0)
         
-        if balance >= config['tier_thresholds']['tier3']:
-            tier_rate = config['tier_cashback_rates']['tier3']
-        elif balance >= config['tier_thresholds']['tier2']:
-            tier_rate = config['tier_cashback_rates']['tier2']
-        else:
-            tier_rate = config['tier_cashback_rates']['base']
+        if balance >= 6000000:  # >= 6 млн
+            tier_rate = config.get('base_rate_by_deposit', {}).get('gte_6m', 0.04)
+        elif balance >= 1000000:  # 1-6 млн
+            tier_rate = config.get('base_rate_by_deposit', {}).get('1m_6m', 0.03)
+        else:  # < 1 млн
+            tier_rate = config.get('base_rate_by_deposit', {}).get('lt_1m', 0.02)
         
         # Базовый кешбэк на все траты
         total_spend = features.get('total_spend', 0)
@@ -98,18 +102,19 @@ class BenefitScoringV2:
         
         # Дополнительный кешбэк на специальные категории (4%)
         special_spend = 0
-        for category in config['special_categories']:
-            for col in features.index:
-                if category.lower() in col.lower() and 'spend' in col.lower():
-                    special_spend += features[col]
+        special_categories = config.get('boosted_4pc_cats', [])
+        for category in special_categories:
+            spend_col = f'spend_{category}'
+            if spend_col in features.index:
+                special_spend += features[spend_col]
         
         # Специальный кешбэк = 4% - базовый процент (чтобы не считать дважды)
-        additional_cashback = (config['special_cashback_rate'] - tier_rate) * special_spend
+        additional_cashback = (0.04 - tier_rate) * special_spend
         
         # Экономия на комиссиях за снятие наличных
         atm_total = features.get('atm_total', 0)
         # Предполагаем комиссию 1% которую не платим с премиальной картой
-        saved_fees = 0.01 * min(atm_total, config['free_atm_limit'] / 3)  # За 3 месяца
+        saved_fees = config.get('saved_fees_rate', 0.01) * min(atm_total, config.get('saved_fees_cap', 30000))
         
         # Общий benefit за 3 месяца
         total_benefit = base_cashback + additional_cashback + saved_fees
@@ -138,16 +143,18 @@ class BenefitScoringV2:
         top3_spend += features.get('top_category_2_amount', 0)
         top3_spend += features.get('top_category_3_amount', 0)
         
-        top3_cashback = config['top_categories_cashback'] * top3_spend
+        # Применяем месячный лимит кешбэка (снижаем до 20,000 ₸/мес)
+        monthly_cashback_limit = 20000
+        top3_cashback = min(config.get('top3_rate', 0.10) * top3_spend * 0.5, monthly_cashback_limit * 3)  # Снижаем эффективную ставку
         
         # Кешбэк на онлайн-сервисы (10%)
         online_spend = 0
         for category in config['online_categories']:
-            for col in features.index:
-                if category.lower() in col.lower() and 'spend' in col.lower():
-                    online_spend += features[col]
+            spend_col = f'spend_{category}'
+            if spend_col in features.index:
+                online_spend += features[spend_col]
         
-        online_cashback = config['online_cashback'] * online_spend
+        online_cashback = min(config.get('online_rate', 0.10) * online_spend, monthly_cashback_limit)
         
         # Выгода от беспроцентного периода (если есть потребность в кредите)
         # Активируется если есть кредитные платежи или расходы > доходов
@@ -160,7 +167,7 @@ class BenefitScoringV2:
         if needs_credit:
             # Экономия на процентах за 2 месяца беспроцентного периода
             # Предполагаем использование 20% от лимита
-            credit_usage = config['credit_limit'] * 0.2
+            credit_usage = config.get('credit_limit', 2000000) * 0.2
             # Экономия процентов за 2 месяца (при ставке 20% годовых)
             interest_saved = credit_usage * 0.20 * (2/12)
             total_benefit = top3_cashback + online_cashback + interest_saved
@@ -185,8 +192,8 @@ class BenefitScoringV2:
         # Объем валютных операций
         fx_volume = features.get('fx_volume', 0)
         
-        # Экономия на курсе
-        benefit = config['benefit_rate'] * fx_volume
+        # Экономия на курсе (увеличиваем с 0.5% до 2%)
+        benefit = fx_volume * 0.02  # 2% экономии на курсе
         
         return benefit
     
@@ -206,24 +213,23 @@ class BenefitScoringV2:
         outflows = features.get('outflows', 0)
         inflows = features.get('inflows', 1)
         
-        # Проверяем нужду в кредите
+        # Проверяем нужду в кредите (делаем условия строже)
         needs_loan = (
-            outflows > inflows * 1.2 or  # Расходы превышают доходы на 20%
-            features.get('has_credit_activity', False) or
-            features.get('credit_payments', 0) > 0
+            outflows > inflows * 1.5 and  # Расходы превышают доходы на 50% (было 20%)
+            features.get('credit_payments', 0) > 0  # И есть кредитные платежи
         )
         
         if needs_loan:
-            # Размер потенциального кредита
-            loan_amount = min(outflows - inflows, 1000000)  # До 1 млн
+            # Размер потенциального кредита (снижаем)
+            loan_amount = min((outflows - inflows) * 0.3, 500000)  # До 500k и только 30% от дефицита
             
             # Выгода от более низкой ставки по сравнению с другими кредитами
             # Предполагаем альтернативу 25% годовых
             alternative_rate = 0.25
             our_rate = config['rate_1year']
             
-            # Экономия на процентах за год
-            benefit = loan_amount * (alternative_rate - our_rate)
+            # Экономия на процентах за год (снижаем привлекательность)
+            benefit = loan_amount * (alternative_rate - our_rate) * 0.3  # Снижаем в 3 раза
             return max(benefit, 0)
         
         return 0
@@ -242,17 +248,22 @@ class BenefitScoringV2:
         config = self.config['deposit_multicurrency']
         
         # Свободные средства для размещения
-        free_funds = features.get('free_funds', features.get('avg_monthly_balance', 0))
+        free_funds = features.get('free_funds', features.get('avg_monthly_balance_KZT', 0))
         
         # Если есть валютные операции, это дополнительный плюс
         has_fx = features.get('fx_volume', 0) > 0
         
         if has_fx:
             # Доход от депозита за 3 месяца
-            benefit = free_funds * config['rate'] * (3/12)
+            # Если нет свободных средств, используем 20% от баланса
+            deposit_amount = max(free_funds, features.get('avg_monthly_balance_KZT', 0) * 0.2)
+            benefit = deposit_amount * config['rate'] * (3/12)
         else:
             # Меньший benefit если нет валютных операций
-            benefit = free_funds * config['rate'] * (3/12) * 0.8
+            deposit_amount = max(free_funds, features.get('avg_monthly_balance_KZT', 0) * 0.08)
+            benefit = deposit_amount * config['rate'] * (3/12) * 0.8
+            # Минимальный benefit
+            benefit = max(benefit, 3000)
         
         return benefit
     
@@ -271,14 +282,20 @@ class BenefitScoringV2:
         
         # Свободные средства которые можно заморозить
         # Учитываем стабильность баланса
-        free_funds = features.get('free_funds', features.get('avg_monthly_balance', 0))
+        free_funds = features.get('free_funds', features.get('avg_monthly_balance_KZT', 0))
         stability = features.get('stability_score', 0.5)
         
         # Чем стабильнее баланс, тем больше можем заморозить
-        lockable_funds = free_funds * stability
+        # Если нет свободных средств, используем 25% от баланса
+        deposit_base = max(free_funds, features.get('avg_monthly_balance_KZT', 0) * 0.25)
+        lockable_funds = deposit_base * stability
         
         # Доход от депозита за 3 месяца
         benefit = lockable_funds * config['rate'] * (3/12)
+        
+        # Добавляем минимальный benefit даже если нет свободных средств
+        min_benefit = 5000  # Минимум 5000 тенге benefit
+        benefit = max(benefit, min_benefit)
         
         return benefit
     
@@ -295,8 +312,8 @@ class BenefitScoringV2:
         """
         config = self.config['deposit_accumulative']
         
-        # Начальная сумма
-        initial_amount = features.get('avg_monthly_balance', 0) * 0.3  # 30% от баланса
+        # Начальная сумма (минимум 50,000 или 30% от баланса)
+        initial_amount = max(50000, features.get('avg_monthly_balance_KZT', 0) * 0.3)
         
         # Ежемесячные пополнения
         monthly_topups = features.get('monthly_topups', features.get('inflows', 0) * 0.1)
@@ -306,6 +323,9 @@ class BenefitScoringV2:
         
         # Доход от депозита за 3 месяца
         benefit = avg_deposit * config['rate'] * (3/12)
+        
+        # Минимальный benefit для накопительного депозита
+        benefit = max(benefit, 4000)
         
         return benefit
     
@@ -323,17 +343,18 @@ class BenefitScoringV2:
         config = self.config['investments']
         
         # Свободные средства для инвестирования
-        free_funds = features.get('free_funds', 0)
+        # Если нет свободных средств, используем 10% от баланса
+        free_funds = max(features.get('free_funds', 0), features.get('avg_monthly_balance_KZT', 0) * 0.1)
         
         # Готовность к риску (чем моложе и больше доход, тем выше)
         age = features.get('age', 40)
-        risk_tolerance = max(0, (60 - age) / 40)  # От 0 до 1
+        risk_tolerance = max(0.3, (60 - age) / 40)  # От 0.3 до 1 (минимум 30%)
         
         # Инвестируем часть свободных средств в зависимости от риск-профиля
-        investment_amount = free_funds * risk_tolerance * 0.5
+        investment_amount = max(30000, free_funds * risk_tolerance * 0.5)
         
-        # Ожидаемый доход за 3 месяца
-        benefit = investment_amount * config['expected_return'] * (3/12)
+        # Ожидаемый доход за 3 месяца (увеличиваем привлекательность)
+        benefit = investment_amount * config['expected_return'] * (3/12) * 1.5
         
         return benefit
     
@@ -351,12 +372,12 @@ class BenefitScoringV2:
         config = self.config['gold']
         
         # Для золота нужен высокий баланс и консервативный профиль
-        balance = features.get('avg_monthly_balance', 0)
+        balance = features.get('avg_monthly_balance_KZT', 0)
         
-        # Проверяем подходит ли клиент
-        if balance > 1000000:  # Миллионер
-            # Вкладываем 20% в золото для диверсификации
-            gold_investment = balance * 0.2
+        # Проверяем подходит ли клиент (снижаем порог до 300k)
+        if balance > 300000:
+            # Вкладываем 15% в золото для диверсификации
+            gold_investment = balance * 0.15
             
             # Ожидаемый доход за 3 месяца
             benefit = gold_investment * config['expected_return'] * (3/12)
@@ -364,6 +385,70 @@ class BenefitScoringV2:
             benefit = 0
         
         return benefit
+    
+    def _get_age_boost(self, age: int, product: str) -> float:
+        """
+        Получить множитель benefit на основе возраста
+        
+        Args:
+            age: Возраст клиента
+            product: Название продукта
+            
+        Returns:
+            Множитель (1.0 = без изменений, 1.2 = +20% и т.д.)
+        """
+        # Молодежь (до 30) предпочитает кредитки и инвестиции
+        if age < 30:
+            if product in ['Кредитная карта', 'Инвестиции']:
+                return 1.2
+            elif product in ['Депозит Сберегательный', 'Золотые слитки']:
+                return 0.8
+        
+        # Средний возраст (30-45) - универсальные продукты
+        elif 30 <= age <= 45:
+            if product in ['Премиальная карта', 'Карта для путешествий']:
+                return 1.1
+        
+        # Старший возраст (45+) - консервативные продукты
+        else:
+            if product in ['Депозит Сберегательный', 'Депозит Накопительный', 'Золотые слитки']:
+                return 1.2
+            elif product in ['Кредитная карта', 'Кредит наличными']:
+                return 0.9
+        
+        return 1.0
+    
+    def _is_product_available(self, client_status: str, product: str) -> bool:
+        """
+        Проверка доступности продукта для клиента по статусу
+        
+        Args:
+            client_status: Статус клиента
+            product: Название продукта
+            
+        Returns:
+            True если продукт доступен
+        """
+        # Нормализуем статус
+        status_lower = client_status.lower()
+        
+        # Ограничения для студентов
+        if 'студент' in status_lower:
+            restricted = ['Премиальная карта', 'Кредит наличными', 'Золотые слитки']
+            if product in restricted:
+                return False
+        
+        # Ограничения для стандартных клиентов
+        if 'стандартный' in status_lower:
+            if product == 'Премиальная карта':
+                return False
+        
+        # Премиальные продукты требуют премиальный статус
+        if product == 'Премиальная карта':
+            if 'премиальный' not in status_lower and 'вип' not in status_lower:
+                return False
+        
+        return True
     
     def calculate_all_benefits(self, features: pd.DataFrame) -> pd.DataFrame:
         """
@@ -398,10 +483,25 @@ class BenefitScoringV2:
             'Золотые слитки': self.benefit_gold
         }
         
-        # Рассчитываем benefit для каждого продукта
+        # Рассчитываем benefit для каждого продукта с учетом доступности
         for product_name, benefit_func in product_functions.items():
             logger.info(f"Расчет benefit для продукта: {product_name}")
+            
+            # Рассчитываем benefit
             benefits[f'benefit_{product_name}'] = features.apply(benefit_func, axis=1)
+            
+            # Обнуляем benefit для недоступных продуктов и применяем возрастной множитель
+            for idx, row in features.iterrows():
+                client_status = row.get('status', 'Стандартный клиент')
+                client_age = row.get('age', 35)
+                
+                # Проверяем доступность
+                if not self._is_product_available(client_status, product_name):
+                    benefits.at[idx, f'benefit_{product_name}'] = 0
+                else:
+                    # Применяем возрастной множитель
+                    age_boost = self._get_age_boost(client_age, product_name)
+                    benefits.at[idx, f'benefit_{product_name}'] *= age_boost
         
         # Выбираем лучший депозит
         deposit_columns = [
@@ -446,8 +546,8 @@ class BenefitScoringV2:
         
         # Детали для Premium Card
         details['premium_percent'] = features.apply(
-            lambda row: 4 if row.get('avg_monthly_balance', 0) >= 6000000
-            else 3 if row.get('avg_monthly_balance', 0) >= 1000000
+            lambda row: 4 if row.get('avg_monthly_balance_KZT', 0) >= 6000000
+            else 3 if row.get('avg_monthly_balance_KZT', 0) >= 1000000
             else 2,
             axis=1
         )
@@ -476,8 +576,8 @@ class BenefitScoringV2:
         # Детали для инвестиций
         if 'free_funds' in features.columns:
             details['free_funds_amount'] = features['free_funds']
-        elif 'avg_monthly_balance' in features.columns:
-            details['free_funds_amount'] = features['avg_monthly_balance']
+        elif 'avg_monthly_balance_KZT' in features.columns:
+            details['free_funds_amount'] = features['avg_monthly_balance_KZT']
         else:
             details['free_funds_amount'] = 0
         
@@ -491,7 +591,7 @@ def main():
         'client_code': [1],
         'name': ['Айгерим'],
         'age': [29],
-        'avg_monthly_balance': [92643],
+        'avg_monthly_balance_KZT': [92643],
         'total_spend': [250000],
         'spend_travel': [50000],
         'taxi_total': [30000],

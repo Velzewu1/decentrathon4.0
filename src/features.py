@@ -72,7 +72,7 @@ class FeatureEngineering:
         
         # Переименование колонок
         client_features.columns = [
-            'client_code', 'name', 'status', 'age', 'city', 'avg_monthly_balance',
+            'client_code', 'name', 'status', 'age', 'city', 'avg_monthly_balance_KZT',
             'total_amount', 'transaction_count', 'avg_transaction', 'std_transaction',
             'first_transaction', 'last_transaction'
         ]
@@ -355,8 +355,11 @@ class FeatureEngineering:
         # Ежемесячные пополнения (для накопительного вклада)
         features['monthly_topups'] = features['inflows'] / 3  # делим на количество месяцев
         
-        # Свободные средства (для инвестиций)
-        features['free_funds'] = features['avg_monthly_balance'] + features['net_flow']
+        # Свободные средства (для инвестиций и депозитов)
+        # Учитываем средний баланс и чистый поток, но оставляем резерв на расходы
+        monthly_expenses = features['total_spend'] / 3  # Средние расходы в месяц
+        features['free_funds'] = features['avg_monthly_balance_KZT'] - (monthly_expenses * 0.5)  # Оставляем 50% на текущие расходы
+        features['free_funds'] = features['free_funds'].clip(lower=0)  # Не может быть отрицательным
         
         logger.info(f"Создано {len(features.columns)} признаков для {len(features)} клиентов")
         
