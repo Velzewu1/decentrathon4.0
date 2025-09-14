@@ -214,14 +214,15 @@ echo "OPENAI_API_KEY=your_api_key_here" > .env
                     "Депозит Накопительный": "15,5%"}
             rate = rates.get(product, "15%")
             
-            if product == "Депозит Мультивалютный" and fx_volume > 0:
-                # Мультивалютный депозит с FX активностью
-                balance_str = self._format_currency(balance) if balance > 0 else ""
-                fx_str = self._format_currency(fx_volume)
-                prompt += f"Наблюдение: валютные операции {fx_str} за последние 3 месяца. {product} под {rate} годовых — удобно для мультивалютных операций."
-            elif product == "Депозит Мультивалютный" and fx_volume == 0:
-                # Мультивалютный без FX - заменяем на сберегательный
-                prompt += f"Продукт: Депозит Сберегательный под 16,5% годовых. Надежное размещение с высокой ставкой."
+            if product == "Депозит Мультивалютный":
+                # Всегда говорим про мультивалютный, если он назначен
+                if fx_volume > 0:
+                    fx_str = self._format_currency(fx_volume)
+                    prompt += f"Наблюдение: валютные операции {fx_str} за последние 3 месяца. {product} под {rate} годовых — удобно для работы с валютами, доступ к средствам."
+                else:
+                    # Даже без FX говорим про мультивалютный, раз он назначен
+                    balance_str = self._format_currency(balance) if balance > 0 else ""
+                    prompt += f"Наблюдение: средний баланс {balance_str}. {product} под {rate} годовых — диверсификация валют, доступ к средствам."
             elif balance > 0:
                 balance_str = self._format_currency(balance)
                 prompt += f"Наблюдение: средний баланс {balance_str}. {product} под {rate} годовых — надежное размещение."
@@ -370,23 +371,16 @@ echo "OPENAI_API_KEY=your_api_key_here" > .env
         result = best_products.copy()
         result['push_notification'] = push_notifications
         
-        # ИСПРАВЛЯЕМ НЕСООТВЕТСТВИЕ: если в push тексте упоминается "Сберегательный депозит", 
-        # то и продукт должен быть "Депозит Сберегательный"
-        # НО ТОЛЬКО если у клиента НЕТ FX активности
+        # Проверяем консистентность продукт ↔ текст (без автозамены)
         for idx, row in result.iterrows():
-            push = row['push_notification']
             product = row['product']
             client_code = row['client_code']
             
-            # Проверяем FX активность клиента из исходных данных
-            client_features = features[features['client_code'] == client_code].iloc[0]
-            fx_volume = client_features.get('fx_volume_KZT', 0)
-            
-            if product == "Депозит Мультивалютный" and "сберегательный депозит" in push.lower() and fx_volume == 0:
-                result.at[idx, 'product'] = "Депозит Сберегательный"
-                logger.info(f"🔄 Клиент {client_code}: Мультивалютный → Сберегательный (нет FX)")
-            elif product == "Депозит Мультивалютный" and fx_volume > 0:
-                logger.info(f"✅ Клиент {client_code}: Мультивалютный сохранен (есть FX: {fx_volume:,.0f} ₸)")
+            # Просто логируем для отладки
+            if product == "Депозит Мультивалютный":
+                client_features = features[features['client_code'] == client_code].iloc[0]
+                fx_volume = client_features.get('fx_volume_KZT', 0)
+                logger.info(f"✅ Клиент {client_code}: {product} (FX: {fx_volume:,.0f} ₸)")
         
         logger.info(f"🏆 Сгенерировано {len(result)} высококачественных LLM push-уведомлений")
         return result[['client_code', 'product', 'push_notification']]
