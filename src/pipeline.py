@@ -138,7 +138,7 @@ class RecommendationPipeline:
             
             # Шаг 6: Генерация push-уведомлений
             logger.info("\n[6/7] Генерация push-уведомлений...")
-            recommendations = self.composer.compose_push_for_clients(features, details, ranked_products)
+            recommendations = self.composer.compose_push_for_clients(features, ranked_products)
             results['pushes_generated'] = len(recommendations)
             logger.info(f"🏆 Сгенерировано {len(recommendations)} высококачественных LLM push-уведомлений")
             

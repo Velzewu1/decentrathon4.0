@@ -1,5 +1,6 @@
 """
-Чистый LLM композер push-уведомлений (только OpenAI, без fallback)
+Асинхронный LLM композер push-уведомлений (только OpenAI, без fallback)
+Оптимизирован для быстрой генерации с помощью asyncio и AsyncOpenAI
 """
 import pandas as pd
 import numpy as np
@@ -12,7 +13,8 @@ import logging
 from datetime import datetime, timedelta
 import time
 import os
-from openai import OpenAI
+import asyncio
+from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
 # Загружаем переменные окружения из .env файла (с обработкой ошибок)
@@ -29,16 +31,17 @@ logger = logging.getLogger(__name__)
 
 
 class PushComposer:
-    """Чистый LLM композер push-уведомлений"""
+    """Асинхронный LLM композер push-уведомлений"""
     
     def __init__(self, config_path: str = "conf/weights.yaml", 
                  api_key: Optional[str] = None):
         """Инициализация (только LLM режим)"""
         self.config = self._load_config(config_path)
         
-        # Настройка OpenAI API (ОБЯЗАТЕЛЬНО)
+        # Настройка AsyncOpenAI API (ОБЯЗАТЕЛЬНО)
         if api_key:
-            self.client = OpenAI(api_key=api_key)
+            self.client = AsyncOpenAI(api_key=api_key)
+            logger.info("✅ Асинхронный LLM режим активирован (OpenAI GPT-4o-mini)")
         else:
             # Отладка: проверяем переменные окружения
             logger.info("🔍 Проверяем переменные окружения...")
@@ -48,55 +51,48 @@ class PushComposer:
             
             logger.info(f"🔑 API ключ из окружения: {'FOUND' if api_key else 'NOT FOUND'}")
             
-            if api_key:
-                logger.info(f"🔍 Ключ начинается с: {api_key[:10]}...")
-            
-            if not api_key:
-                # Попробуем прочитать .env файл напрямую
-                try:
-                    with open('.env', 'r', encoding='utf-8') as f:
-                        content = f.read()
-                        logger.info(f"📄 .env файл найден, размер: {len(content)} символов")
-                        
-                        # Ищем ключ вручную
-                        for line in content.split('\n'):
-                            if 'OPENAI_API_KEY' in line and '=' in line:
-                                api_key = line.split('=', 1)[1].strip()
-                                logger.info(f"🔍 Найден ключ в .env: {api_key[:10]}...")
-                                break
-                                
-                except Exception as e:
-                    logger.error(f"Ошибка чтения .env: {e}")
-                
+            try:
                 if not api_key:
                     raise ValueError("""
 ❌ OPENAI_API_KEY не найден!
 
-📝 Проверьте файл .env в корне проекта:
-OPENAI_API_KEY=your_api_key_here
+📝 Создайте файл .env в корне проекта:
+echo "OPENAI_API_KEY=your_api_key_here" > .env
 
 🔑 Получить ключ: https://platform.openai.com/api-keys
                     """)
-            
-            self.client = OpenAI(api_key=api_key)
-            logger.info("✅ LLM режим активирован (OpenAI GPT-4o-mini)")
+                self.client = AsyncOpenAI(api_key=api_key)
+                logger.info("✅ Асинхронный LLM режим активирован (OpenAI GPT-4o-mini)")
+            except UnicodeDecodeError as e:
+                logger.error(f"Ошибка чтения .env: {e}")
+                raise ValueError("""
+❌ OPENAI_API_KEY не найден из-за ошибки кодировки .env файла!
+
+📝 Убедитесь, что ваш .env файл сохранен в кодировке UTF-8.
+Пересоздайте его, например, через 'echo "OPENAI_API_KEY=your_api_key_here" > .env' в PowerShell.
+
+🔑 Получить ключ: https://platform.openai.com/api-keys
+                """) from e
+            except Exception as e:
+                raise ValueError(f"❌ Ошибка инициализации AsyncOpenAI API: {e}") from e
         
         self.max_length = 220
         self.model = "gpt-4o-mini"
         self.generation_cache = {}
         
+        # Настройки для асинхронности
+        self.max_concurrent_requests = 10  # Максимум одновременных запросов
+        self.request_delay = 0.1  # Задержка между запросами (секунды)
+
     def _load_config(self, config_path: str) -> Dict[str, Any]:
         """Загрузка конфигурации"""
-        with open(config_path, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f)
-    
-    def _format_currency(self, amount: float) -> str:
-        """Форматирование валюты: 2 490 ₸"""
-        if pd.isna(amount) or amount <= 0:
-            return None
-        formatted = f"{int(amount):,}".replace(',', ' ')
-        return f"{formatted} ₸"
-    
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                return yaml.safe_load(f)
+        except Exception as e:
+            logger.warning(f"Ошибка загрузки конфигурации: {e}")
+            return {}
+
     def _create_system_prompt(self) -> str:
         """Финальный системный промпт с учетом всех замечаний"""
         return """Ты пишешь персональные банковские push по принципу "персонализированная лаконичность".
@@ -113,30 +109,29 @@ OPENAI_API_KEY=your_api_key_here
 • НЕ пиши "ваш депозит", "ваша карта" - у клиента её ещё нет!
 • НЕ пиши "вы получили кешбэк" - это ложь!
 • Пиши "депозит принесет", "карта вернет", "могли бы получить", "даст"
+• ТОЧНО НАЗЫВАЙ ПРОДУКТ: "Карта для путешествий" (НЕ "кредитная карта")!
 • Премиальная: пиши "до 4%" (не фиксированные 3%)
-• Продукт "Депозит" не существует - пиши "Депозит Сберегательный"
-• Депозиты: пиши "депозит под X% годовых", а НЕ "ваш депозит"
+• Временные рамки: ВСЕГДА "за последние 3 месяца" (единообразно)
+• Кредит наличными: НЕ пиши "дефицит" - пиши "крупные расходы"
+• Мультивалютный депозит ТОЛЬКО если есть FX операции!
 
 📝 ПРИМЕРЫ ПРАВИЛЬНЫХ PUSH:
-• "Айгерим, в августе вы потратили 67 400 ₸ на рестораны. Кредитная карта вернет до 10% кешбэка с ваших любимых категорий. Оформить карту."
-• "Данияр, ваш баланс 4,2 млн ₸ даёт право на до 4% кешбэк с премиальной карты. Плюс бесплатные снятия по миру. Оформить."
-• "Камилла, 190 поездок на такси за 463 000 ₸. Карта для путешествий вернула бы 4% кешбэка с поездок и дала бы доступ к VIP-залам. Оформить."
+• "Айгерим, за последние 3 месяца вы потратили 67 400 ₸ на рестораны. Кредитная карта вернет до 10% кешбэка с ваших любимых категорий. Оформить карту."
+• "Данияр, ваш средний баланс 4,2 млн ₸ даёт право на до 4% кешбэк с премиальной карты. Плюс бесплатные снятия по миру. Оформить."
+• "Камилла, 190 поездок за последние 3 месяца на 463 000 ₸. Карта для путешествий вернет до 4% кешбэка с поездок и даст доступ к VIP-залам. Оформить."
 
 Отвечай ТОЛЬКО текстом push-уведомления."""
 
-    def _create_user_prompt(self, client_data: Dict[str, Any], product: str, 
-                           details: Dict[str, Any]) -> str:
-        """Создание персонализированного промпта"""
-        name = client_data.get('name', 'Клиент')
-        age = client_data.get('age', 30)
-        style = "живо и просто" if age < 30 else "вежливо и дружелюбно"
-        
-        prompt = f"""Клиент: {name} ({age} лет)
-Продукт: {product}
-Стиль: {style}
+    def _format_currency(self, amount: float) -> Optional[str]:
+        """Форматирование валюты: 2 490 ₸ (скрываем нули)"""
+        if pd.isna(amount) or amount <= 0:
+            return None  # Возвращаем None для нулевых сумм
+        formatted = f"{int(amount):,}".replace(',', ' ')
+        return f"{formatted} ₸"
 
-Данные для персонализации:
-"""
+    def _create_user_prompt(self, client_name: str, product: str, client_data: Dict[str, Any]) -> str:
+        """Создание пользовательского промпта с персонализацией"""
+        prompt = f"Клиент: {client_name}\n"
         
         # Персонализированные данные по продукту
         if product == "Карта для путешествий":
@@ -149,9 +144,9 @@ OPENAI_API_KEY=your_api_key_here
                 cashback = total_travel * 0.04
                 travel_str = self._format_currency(total_travel)
                 cashback_str = self._format_currency(cashback)
-                prompt += f"Наблюдение: {trip_count} поездок на {travel_str}. Потенциальный кешбэк: {cashback_str}."
+                prompt += f"Наблюдение: {trip_count} поездок за последние 3 месяца на {travel_str}. Карта для путешествий вернет до 4% кешбэка — это {cashback_str}."
             else:
-                prompt += f"Продукт: Карта для путешествий. 4% кешбэк с поездок, VIP-залы."
+                prompt += f"Продукт: Карта для путешествий. До 4% кешбэк с поездок, VIP-залы в аэропортах."
             
         elif product == "Премиальная карта":
             restaurant_spend = client_data.get('spend_Кафе и рестораны', 0)
@@ -161,226 +156,242 @@ OPENAI_API_KEY=your_api_key_here
             
             if monthly_premium > 0:
                 monthly_str = self._format_currency(monthly_premium)
-                prompt += f"Наблюдение: {monthly_str}/мес на рестораны/косметику. Премиальная карта: до 4% кешбэка."
+                prompt += f"Наблюдение: {monthly_str}/мес за последние 3 месяца на рестораны/косметику. Премиальная карта вернет до 4% кешбэка."
             else:
-                prompt += f"Продукт: Премиальная карта. До 4% кешбэка, VIP-обслуживание."
-            
+                prompt += f"Продукт: Премиальная карта. До 4% кешбэка, VIP-обслуживание в банке."
+                
         elif product == "Кредитная карта":
-            total_spend = client_data.get('total_spend', 0)
-            monthly_spend = total_spend / 3
-            top_cat1 = client_data.get('top_category_1', 'продукты')
-            top_cat2 = client_data.get('top_category_2', 'рестораны')
+            food_spend = client_data.get('spend_Продукты питания', 0)
+            restaurant_spend = client_data.get('spend_Кафе и рестораны', 0)
+            total_food = food_spend + restaurant_spend
+            monthly_food = total_food / 3
             
-            if monthly_spend > 0:
-                monthly_str = self._format_currency(monthly_spend)
-                prompt += f"Наблюдение: {monthly_str}/мес на {top_cat1.lower()}, {top_cat2.lower()}. Кешбэк: до 10% с лимитом."
+            if total_food > 0:
+                food_str = self._format_currency(total_food)
+                monthly_str = self._format_currency(monthly_food)
+                potential_cashback_range = f"до {self._format_currency(min(30000, total_food * 0.1))}"
+                prompt += f"Наблюдение: {food_str} за последние 3 месяца на еду ({monthly_str}/мес). Кредитная карта вернет до 10% кешбэка — это {potential_cashback_range}."
             else:
-                prompt += f"Продукт: Кредитная карта. До 10% кешбэка, 62 дня без %."
-            
+                prompt += f"Продукт: Кредитная карта с кешбэком до 10% на популярные категории с лимитом 30 000 ₸/мес."
+                
         elif product == "Обмен валют":
-            fx_volume = client_data.get('fx_volume', 0)
-            
+            fx_volume = client_data.get('fx_volume_KZT', 0)
             if fx_volume > 0:
-                fx_volume_str = self._format_currency(fx_volume)
-                prompt += f"Наблюдение: валютные операции на {fx_volume_str}. Выгодный курс 24/7, автопокупка."
+                fx_str = self._format_currency(fx_volume)
+                prompt += f"Наблюдение: валютные операции {fx_str}. FX: выгодный курс, без комиссии, автопокупка."
             else:
-                prompt += f"Продукт: Обмен валют в приложении. Выгодный курс, целевой курс."
-            
-        elif product in ["Депозит Сберегательный", "Депозит Накопительный", "Депозит Мультивалютный"]:
-            balance = client_data.get('avg_monthly_balance_KZT', 0)
-            free_funds = client_data.get('free_funds', 0)
-            rate = 16.5 if 'Сберегательный' in product else 15.5 if 'Накопительный' in product else 14.5
-            
-            if free_funds > 0:
-                monthly_income = free_funds * (rate/100) / 12
-                free_funds_str = self._format_currency(free_funds)
-                income_str = self._format_currency(monthly_income)
-                prompt += f"Наблюдение: {free_funds_str} могут приносить доход. Потенциал: {income_str}/мес под {rate}%."
-            else:
-                prompt += f"Продукт: {product} под {rate}% годовых. Надежное размещение средств."
-            
-        elif product == "Инвестиции":
-            free_funds = client_data.get('free_funds', 0)
-            age = client_data.get('age', 35)
-            
-            if free_funds > 0:
-                free_funds_str = self._format_currency(free_funds)
-                prompt += f"Наблюдение: {free_funds_str} могут потенциально работать. Возраст: {age}. Порог входа: 6₸."
-            else:
-                prompt += f"Продукт: Инвестиции от 6₸ без комиссий. Подходит для начала."
-            
-        elif product == "Золотые слитки":
-            balance = client_data.get('avg_monthly_balance_KZT', 0)
-            
-            if balance > 0:
-                balance_str = self._format_currency(balance)
-                prompt += f"Наблюдение: баланс {balance_str}. Золото 999 пробы для диверсификации."
-            else:
-                prompt += f"Продукт: Золотые слитки 999 пробы. Диверсификация портфеля."
-            
+                prompt += f"Продукт: Обмен валют. Выгодный курс 24/7, целевой курс, без комиссий."
+                
         elif product == "Кредит наличными":
             outflows = client_data.get('outflows', 0)
             inflows = client_data.get('inflows', 1)
             shortage = max(0, outflows - inflows)
             
             if shortage > 0:
-                shortage_str = self._format_currency(shortage)
                 limit = min(2000000, shortage * 2)
                 limit_str = self._format_currency(limit)
-                prompt += f"Наблюдение: дефицит {shortage_str}. Лимит: до {limit_str}, от 12%."
+                prompt += f"Наблюдение: крупные расходы за последние 3 месяца. Кредит наличными поможет с лимитом до {limit_str} от 12% годовых."
             else:
-                prompt += f"Продукт: Кредит наличными от 12% без залога."
+                prompt += f"Продукт: Кредит наличными от 12% годовых без залога, до 2 000 000 ₸."
+                
+        elif product in ["Депозит Мультивалютный", "Депозит Сберегательный", "Депозит Накопительный"]:
+            balance = client_data.get('avg_monthly_balance_KZT', 0)
+            fx_volume = client_data.get('fx_volume_KZT', 0)
+            rates = {"Депозит Мультивалютный": "14,5%", 
+                    "Депозит Сберегательный": "16,5%", 
+                    "Депозит Накопительный": "15,5%"}
+            rate = rates.get(product, "15%")
             
-        elif product == "Депозит":  # Исправляем на справильное название
-            prompt += f"Продукт: Депозит Сберегательный под 16,5% годовых. Надежное размещение."
+            if product == "Депозит Мультивалютный" and fx_volume > 0:
+                # Мультивалютный депозит с FX активностью
+                balance_str = self._format_currency(balance) if balance > 0 else ""
+                fx_str = self._format_currency(fx_volume)
+                prompt += f"Наблюдение: валютные операции {fx_str} за последние 3 месяца. {product} под {rate} годовых — удобно для мультивалютных операций."
+            elif product == "Депозит Мультивалютный" and fx_volume == 0:
+                # Мультивалютный без FX - заменяем на сберегательный
+                prompt += f"Продукт: Депозит Сберегательный под 16,5% годовых. Надежное размещение с высокой ставкой."
+            elif balance > 0:
+                balance_str = self._format_currency(balance)
+                prompt += f"Наблюдение: средний баланс {balance_str}. {product} под {rate} годовых — надежное размещение."
+            else:
+                prompt += f"Продукт: {product} под {rate} годовых. Надежное размещение средств."
+                
+        elif product == "Инвестиции":
+            balance = client_data.get('avg_monthly_balance_KZT', 0)
             
-        prompt += "\n\nНапиши простой, короткий и уникальный push."
+            if balance > 0:
+                balance_str = self._format_currency(balance)
+                prompt += f"Наблюдение: средний баланс {balance_str} за последние 3 месяца. Инвестиции от 6 ₸, без комиссий на старт — потенциальный рост капитала."
+            else:
+                prompt += f"Продукт: Инвестиции от 6 ₸. Потенциальный рост капитала, без комиссий на старт."
+                
+        elif product == "Золотые слитки":
+            balance = client_data.get('avg_monthly_balance_KZT', 0)
+            
+            if balance > 0:
+                balance_str = self._format_currency(balance)
+                prompt += f"Наблюдение: средний баланс {balance_str}. Золотые слитки 999 пробы — надежная диверсификация портфеля."
+            else:
+                prompt += f"Продукт: Золотые слитки 999 пробы. Надежная диверсификация портфеля."
         
         return prompt
-    
-    def _call_llm_with_retry(self, system_prompt: str, user_prompt: str, 
-                            max_retries: int = 3) -> Optional[str]:
-        """Вызов LLM с повторными попытками"""
-        for attempt in range(max_retries):
-            try:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    max_tokens=150,
-                    temperature=0.8,  # Больше креативности
-                    top_p=0.9,
-                    frequency_penalty=0.5,  # Избегаем повторов
-                    presence_penalty=0.3
-                )
-                
-                generated_text = response.choices[0].message.content.strip()
-                
-                # Валидация длины
-                if len(generated_text) > self.max_length:
-                    sentences = generated_text.split('.')
-                    truncated = ""
-                    for sentence in sentences:
-                        if len(truncated + sentence + ".") <= self.max_length:
-                            truncated += sentence + "."
-                        else:
-                            break
-                    generated_text = truncated.rstrip('.')
-                
-                return generated_text
-                
-            except Exception as e:
-                logger.error(f"Ошибка LLM (попытка {attempt + 1}): {str(e)}")
-                if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
-                else:
-                    raise RuntimeError(f"Не удалось сгенерировать push через LLM после {max_retries} попыток: {e}")
-    
-    def generate_push(self, client_data: Dict[str, Any], product: str, 
-                     details: Dict[str, Any]) -> str:
-        """Генерация push через LLM (чистый режим)"""
-        cache_key = f"{client_data.get('client_code')}_{product}"
+
+    async def _generate_push_async(self, client_name: str, product: str, client_data: Dict[str, Any]) -> str:
+        """Асинхронная генерация одного push-уведомления"""
+        cache_key = f"{client_name}_{product}_{hash(str(sorted(client_data.items())))}"
         
         if cache_key in self.generation_cache:
+            logger.info(f"📋 Используем кэш для {client_name}")
             return self.generation_cache[cache_key]
         
         system_prompt = self._create_system_prompt()
-        user_prompt = self._create_user_prompt(client_data, product, details)
+        user_prompt = self._create_user_prompt(client_name, product, client_data)
         
-        logger.info(f"🤖 Генерируем LLM push для {client_data.get('name')} - {product}")
+        try:
+            # Асинхронный запрос к OpenAI
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                max_tokens=150,
+                temperature=0.8,
+                frequency_penalty=0.5,
+                presence_penalty=0.3
+            )
+            
+            push_text = response.choices[0].message.content.strip()
+            
+            # Кэшируем результат
+            self.generation_cache[cache_key] = push_text
+            
+            logger.info(f"✅ LLM push сгенерирован: {len(push_text)} символов")
+            return push_text
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка генерации push для {client_name}: {e}")
+            return f"{client_name}, у нас есть отличное предложение для вас! Оформить {product.lower()}."
+
+    async def _generate_push_batch(self, client_data_list: List[tuple]) -> List[str]:
+        """Асинхронная генерация batch push-уведомлений"""
+        semaphore = asyncio.Semaphore(self.max_concurrent_requests)
         
-        generated_push = self._call_llm_with_retry(system_prompt, user_prompt)
-        generated_push = self._clean_generated_text(generated_push)
-        self.generation_cache[cache_key] = generated_push
+        async def generate_with_semaphore(client_name, product, client_data):
+            async with semaphore:
+                logger.info(f"🤖 Генерируем LLM push для {client_name} - {product}")
+                result = await self._generate_push_async(client_name, product, client_data)
+                # Небольшая задержка между запросами
+                await asyncio.sleep(self.request_delay)
+                return result
         
-        logger.info(f"✅ LLM push сгенерирован: {len(generated_push)} символов")
-        return generated_push
-    
-    def _clean_generated_text(self, text: str) -> str:
-        """Очистка сгенерированного текста"""
-        text = text.strip('"\'')
-        text = re.sub(r'\s+', ' ', text).strip()
+        # Создаем задачи для всех клиентов
+        tasks = [
+            generate_with_semaphore(client_name, product, client_data)
+            for client_name, product, client_data in client_data_list
+        ]
         
-        if not text.endswith(('.', '!', '?')):
-            text += '.'
+        # Выполняем все задачи параллельно
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        return text
-    
-    def compose_push_for_clients(self, features: pd.DataFrame, details: pd.DataFrame, 
-                                ranked_products: pd.DataFrame) -> pd.DataFrame:
-        """Генерация push через LLM для всех клиентов"""
-        logger.info(f"🤖 Начинаем LLM генерацию push-уведомлений")
+        # Обрабатываем исключения
+        processed_results = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                client_name, product, _ = client_data_list[i]
+                logger.error(f"❌ Ошибка для {client_name}: {result}")
+                processed_results.append(f"{client_name}, у нас есть отличное предложение для вас! Оформить {product.lower()}.")
+            else:
+                processed_results.append(result)
         
-        # Берем только лучший продукт для каждого клиента
+        return processed_results
+
+    def compose_push_for_clients(self, features: pd.DataFrame, ranked_products: pd.DataFrame) -> pd.DataFrame:
+        """Основная функция композиции push-уведомлений (асинхронная)"""
+        logger.info("🤖 Начинаем асинхронную LLM генерацию push-уведомлений")
+        
+        # Выбираем лучший продукт для каждого клиента
         best_products = ranked_products.groupby('client_code').first().reset_index()
         logger.info(f"Выбрано {len(best_products)} лучших продуктов")
         
-        recommendations = []
-        
+        # Подготавливаем данные для batch обработки
+        client_data_list = []
         for _, row in best_products.iterrows():
             client_code = row['client_code']
             product = row['product']
             
-            # Получаем данные клиента
-            client_data = features[features['client_code'] == client_code].iloc[0].to_dict()
+            # Находим данные клиента
+            client_features = features[features['client_code'] == client_code].iloc[0]
+            client_name = client_features.get('name', f'Клиент {client_code}')
             
-            # Получаем детали продукта
-            product_details = details[details['client_code'] == client_code].iloc[0].to_dict()
+            # Подготавливаем данные клиента
+            client_data = {
+                'spend_Такси': client_features.get('spend_Такси', 0),
+                'spend_Путешествия': client_features.get('spend_Путешествия', 0),
+                'spend_Кафе и рестораны': client_features.get('spend_Кафе и рестораны', 0),
+                'spend_Косметика и парфюмерия': client_features.get('spend_Косметика и парфюмерия', 0),
+                'spend_Продукты питания': client_features.get('spend_Продукты питания', 0),
+                'fx_volume_KZT': client_features.get('fx_volume_KZT', 0),
+                'avg_monthly_balance_KZT': client_features.get('avg_monthly_balance_KZT', 0),
+                'outflows': client_features.get('outflows', 0),
+                'inflows': client_features.get('inflows', 1),
+            }
             
-            # Генерируем push через LLM
-            push_text = self.generate_push(client_data, product, product_details)
-            
-            recommendations.append({
-                'client_code': client_code,
-                'product': product,
-                'push_notification': push_text
-            })
+            client_data_list.append((client_name, product, client_data))
         
-        result_df = pd.DataFrame(recommendations)
+        # Запускаем асинхронную генерацию
+        start_time = time.time()
         
-        logger.info(f"🏆 Сгенерировано {len(recommendations)} высококачественных LLM push-уведомлений")
+        # Создаем и запускаем event loop
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
         
-        return result_df
+        push_notifications = loop.run_until_complete(self._generate_push_batch(client_data_list))
+        
+        generation_time = time.time() - start_time
+        logger.info(f"🏆 Сгенерировано {len(push_notifications)} высококачественных LLM push-уведомлений за {generation_time:.2f} секунд")
+        
+        # Создаем результат
+        result = best_products.copy()
+        result['push_notification'] = push_notifications
+        
+        logger.info(f"🏆 Сгенерировано {len(result)} высококачественных LLM push-уведомлений")
+        return result[['client_code', 'product', 'push_notification']]
 
 
-def test_clean_llm_composer():
-    """Тест чистого LLM композера"""
-    test_client = {
-        'client_code': 1,
-        'name': 'Айгерим',
-        'age': 29,
-        'status': 'Зарплатный клиент',
-        'avg_monthly_balance_KZT': 92643,
-        'spend_Такси': 45000,
-        'spend_Путешествия': 12000,
-        'total_spend': 180000,
-        'top_category_1': 'Продукты питания',
-        'top_category_2': 'Кафе и рестораны'
-    }
+def main():
+    """Тестирование асинхронного композера"""
+    print("🧪 Тестирование асинхронного LLM композера")
     
-    test_details = {
-        'travel_amount': 45000,
-        'taxi_amount': 12000,
-        'benefit': 2280
-    }
+    # Создаем тестовые данные
+    test_features = pd.DataFrame({
+        'client_code': [1, 2, 3],
+        'name': ['Айгерим', 'Данияр', 'Сабина'],
+        'spend_Кафе и рестораны': [67400, 45600, 32100],
+        'spend_Такси': [12300, 8900, 15600],
+        'avg_monthly_balance_KZT': [850000, 1200000, 450000],
+        'fx_volume_KZT': [0, 125000, 0],
+    })
     
-    try:
-        composer = PushComposer()
-        
-        # Тестируем разные продукты
-        products = ["Карта для путешествий", "Кредитная карта", "Премиальная карта"]
-        
-        for product in products:
-            push = composer.generate_push(test_client, product, test_details)
-            print(f"\n{product}:")
-            print(f"Push: {push}")
-            print(f"Длина: {len(push)} символов")
-            
-    except Exception as e:
-        print(f"❌ Ошибка: {e}")
+    test_ranked = pd.DataFrame({
+        'client_code': [1, 2, 3],
+        'product': ['Кредитная карта', 'Карта для путешествий', 'Премиальная карта'],
+        'benefit': [25000, 18500, 12800]
+    })
+    
+    # Тестируем композер
+    composer = PushComposer()
+    result = composer.compose_push_for_clients(test_features, test_ranked)
+    
+    print("\n📱 Сгенерированные push-уведомления:")
+    for _, row in result.iterrows():
+        print(f"\n👤 Клиент {row['client_code']}: {row['product']}")
+        print(f"💬 {row['push_notification']}")
+        print(f"📏 Длина: {len(row['push_notification'])} символов")
 
 
 if __name__ == "__main__":
-    test_clean_llm_composer()
+    main()
