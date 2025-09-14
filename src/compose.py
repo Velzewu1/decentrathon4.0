@@ -56,7 +56,10 @@ class PushComposer:
                     raise ValueError("""
 ❌ OPENAI_API_KEY не найден!
 
-📝 Создайте файл .env в корне проекта:
+🚀 РЕКОМЕНДУЕМЫЙ СПОСОБ (через аргумент):
+python src/pipeline.py data/clients.csv --api-key your_api_key_here
+
+📝 Альтернатива (через .env файл):
 echo "OPENAI_API_KEY=your_api_key_here" > .env
 
 🔑 Получить ключ: https://platform.openai.com/api-keys
@@ -68,8 +71,12 @@ echo "OPENAI_API_KEY=your_api_key_here" > .env
                 raise ValueError("""
 ❌ OPENAI_API_KEY не найден из-за ошибки кодировки .env файла!
 
-📝 Убедитесь, что ваш .env файл сохранен в кодировке UTF-8.
-Пересоздайте его, например, через 'echo "OPENAI_API_KEY=your_api_key_here" > .env' в PowerShell.
+🚀 РЕКОМЕНДУЕМОЕ РЕШЕНИЕ:
+python src/pipeline.py data/clients.csv --api-key your_api_key_here
+
+📝 Альтернатива (исправить .env):
+Убедитесь, что .env файл сохранен в кодировке UTF-8.
+echo "OPENAI_API_KEY=your_api_key_here" > .env
 
 🔑 Получить ключ: https://platform.openai.com/api-keys
                 """) from e
