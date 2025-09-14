@@ -14,11 +14,11 @@ from datetime import datetime
 sys.path.append(str(Path(__file__).parent))
 
 # Импортируем модули
-from etl import DataLoaderV2
+from etl import DataLoader
 from features import FeatureEngineering
-from scoring import BenefitScoringV2
-from ranking import ProductRankerV2
-from compose import PushComposerV3
+from scoring import BenefitScoring
+from ranking import ProductRanker
+from compose import PushComposer
 from export import ResultExporter
 
 # Настройка логирования
@@ -47,11 +47,11 @@ class RecommendationPipeline:
         """
         logger.info("Инициализация пайплайна")
         
-        self.data_loader = DataLoaderV2(config_path)
+        self.data_loader = DataLoader(config_path)
         self.feature_eng = FeatureEngineering(config_path)
-        self.scoring = BenefitScoringV2(config_path)
-        self.ranking = ProductRankerV2(config_path)
-        self.composer = PushComposerV3(config_path, templates_path)
+        self.scoring = BenefitScoring(config_path)
+        self.ranking = ProductRanker(config_path)
+        self.composer = PushComposer(config_path, templates_path)
         self.exporter = ResultExporter()
         
         logger.info("Пайплайн инициализирован успешно")

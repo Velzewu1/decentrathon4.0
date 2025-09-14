@@ -153,11 +153,11 @@ if __name__ == "__main__":
     # Тестирование
     import sys
     sys.path.append('src')
-    from etl import DataLoaderV2
+    from etl import DataLoader
     from features import FeatureEngineering
     
     # Загружаем данные
-    loader = DataLoaderV2()
+    loader = DataLoader()
     clients_df, transactions_df = loader.load_all_data('data/clients.csv', 'data')
     
     fe = FeatureEngineering('conf/weights.yaml')

@@ -321,12 +321,12 @@ if __name__ == "__main__":
     # Тестовый запуск
     import sys
     sys.path.append('src')
-    from etl import DataLoaderV2
+    from etl import DataLoader
     from features import FeatureEngineering
-    from scoring import BenefitScoringV2
+    from scoring import BenefitScoring
     
     # Загружаем данные
-    loader = DataLoaderV2()
+    loader = DataLoader()
     clients_df, transactions_df = loader.load_all_data('data/clients.csv', 'data')
     
     # Создаем признаки
@@ -334,7 +334,7 @@ if __name__ == "__main__":
     features = fe.create_features(transactions_df)
     
     # Считаем benefits
-    scorer = BenefitScoringV2('conf/weights_v2.yaml')
+    scorer = BenefitScoring('conf/weights.yaml')
     benefits = scorer.calculate_all_benefits(features)
     
     # Загружаем рекомендации

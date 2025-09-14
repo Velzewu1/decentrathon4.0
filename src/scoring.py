@@ -1,5 +1,5 @@
 """
-Модуль для расчета benefit score банковских продуктов (версия 2.0)
+Модуль для расчета benefit score банковских продуктов
 Согласно правилам хакатона
 """
 import pandas as pd
@@ -14,10 +14,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-class BenefitScoringV2:
+class BenefitScoring:
     """Класс для расчета benefit score различных продуктов"""
     
-    def __init__(self, config_path: str = "conf/weights_v2.yaml"):
+    def __init__(self, config_path: str = "conf/weights.yaml"):
         """
         Инициализация
         
@@ -596,7 +596,7 @@ class BenefitScoringV2:
 
 
 def main():
-    """Тестовый запуск scoring v2"""
+    """Тестовый запуск scoring"""
     # Создаем тестовые данные
     test_features = pd.DataFrame({
         'client_code': [1],
@@ -622,7 +622,7 @@ def main():
     })
     
     # Рассчитываем benefit scores
-    scoring = BenefitScoringV2()
+    scoring = BenefitScoring()
     benefits_df = scoring.calculate_all_benefits(test_features)
     
     print("\nBenefit scores для продуктов:")

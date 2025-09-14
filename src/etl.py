@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-class DataLoaderV2:
+class DataLoader:
     """Класс для загрузки и предобработки данных из трех источников"""
     
     def __init__(self, config_path: str = "conf/weights.yaml"):
@@ -285,7 +285,7 @@ class DataLoaderV2:
 
 def main():
     """Тестовый запуск ETL"""
-    loader = DataLoaderV2()
+    loader = DataLoader()
     
     # Загружаем все данные
     clients_df, transactions_df = loader.load_all_data()

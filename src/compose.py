@@ -1,5 +1,5 @@
 """
-Улучшенный модуль композиции push-уведомлений (версия 3.0)
+Модуль композиции push-уведомлений
 Исправлены баги с форматированием, расчетами и соответствием продуктов
 """
 import pandas as pd
@@ -34,11 +34,11 @@ class FormattedNumber:
             return str(self.value)
 
 
-class PushComposerV3:
+class PushComposer:
     """Улучшенный класс для генерации push-уведомлений"""
     
-    def __init__(self, config_path: str = "conf/weights_v3.yaml", 
-                 templates_path: str = "conf/templates_v3.yaml"):
+    def __init__(self, config_path: str = "conf/weights.yaml", 
+                 templates_path: str = "conf/templates.yaml"):
         """
         Инициализация композера
         
@@ -364,7 +364,7 @@ class PushComposerV3:
 
 if __name__ == "__main__":
     # Тестирование
-    composer = PushComposerV3()
+    composer = PushComposer()
     
     # Тестовые данные
     test_features = pd.Series({

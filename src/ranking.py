@@ -10,10 +10,10 @@ import random
 logger = logging.getLogger(__name__)
 
 
-class ProductRankerV2:
+class ProductRanker:
     """Улучшенный класс для ранжирования продуктов"""
     
-    def __init__(self, config_path: str = "conf/weights_v2.yaml"):
+    def __init__(self, config_path: str = "conf/weights.yaml"):
         """
         Инициализация ранжировщика
         
@@ -337,12 +337,12 @@ if __name__ == "__main__":
     
     import sys
     sys.path.append('src')
-    from etl_v2 import DataLoaderV2
+    from etl import DataLoader
     from features import FeatureEngineering
-    from scoring_v2 import BenefitScoringV2
+    from scoring import BenefitScoring
     
     # Загружаем данные
-    loader = DataLoaderV2()
+    loader = DataLoader()
     clients_df, transactions_df = loader.load_all_data('data/clients.csv', 'data')
     
     # Создаем признаки
@@ -350,11 +350,11 @@ if __name__ == "__main__":
     features = fe.create_features(transactions_df)
     
     # Считаем benefits
-    scorer = BenefitScoringV2('conf/weights_v2.yaml')
+    scorer = BenefitScoring('conf/weights.yaml')
     benefits = scorer.calculate_all_benefits(features)
     
     # Ранжируем с новыми правилами
-    ranker = ProductRankerV2('conf/weights_v2.yaml')
+    ranker = ProductRanker('conf/weights.yaml')
     recommendations = ranker.rank_products_for_clients(benefits, features, top_n=1)
     
     print("\nРаспределение продуктов:")
