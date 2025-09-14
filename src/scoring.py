@@ -514,19 +514,7 @@ class BenefitScoring:
                     age_boost = self._get_age_boost(client_age, product_name)
                     benefits.at[idx, f'benefit_{product_name}'] *= age_boost
         
-        # Выбираем лучший депозит
-        deposit_columns = [
-            'benefit_Депозит Мультивалютный',
-            'benefit_Депозит Сберегательный',
-            'benefit_Депозит Накопительный'
-        ]
-        
-        # Находим максимальный benefit среди депозитов
-        benefits['benefit_Депозит'] = benefits[deposit_columns].max(axis=1)
-        
-        # Определяем, какой именно депозит лучший
-        benefits['best_deposit_type'] = benefits[deposit_columns].idxmax(axis=1)
-        benefits['best_deposit_type'] = benefits['best_deposit_type'].str.replace('benefit_', '')
+        # Депозиты обрабатываются как отдельные продукты без группировки
         
         logger.info(f"Benefit scores рассчитаны для {len(benefits)} клиентов")
         

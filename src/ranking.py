@@ -125,13 +125,7 @@ class ProductRanker:
             
             product_benefits[product] = adjusted_score
         
-        # Обрабатываем депозиты особым образом
-        if 'benefit_Депозит' in benefits.index:
-            best_deposit = benefits.get('best_deposit_type', 'Депозит Накопительный')
-            product_benefits[best_deposit] = max(
-                product_benefits.get(best_deposit, 0),
-                benefits['benefit_Депозит']
-            )
+        # Депозиты обрабатываются как обычные продукты
         
         # Сортируем по score и приоритету
         sorted_products = sorted(
