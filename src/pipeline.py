@@ -37,13 +37,15 @@ class RecommendationPipeline:
     """Основной пайплайн для генерации рекомендаций"""
     
     def __init__(self, config_path: str = "conf/weights.yaml",
-                 templates_path: str = "conf/templates.yaml"):
+                 templates_path: str = "conf/templates.yaml",
+                 api_key: str = None):
         """
         Инициализация пайплайна
         
         Args:
             config_path: путь к файлу конфигурации
             templates_path: путь к файлу с шаблонами
+            api_key: OpenAI API ключ для LLM генерации
         """
         logger.info("Инициализация пайплайна")
         
@@ -51,7 +53,9 @@ class RecommendationPipeline:
         self.feature_eng = FeatureEngineering(config_path)
         self.scoring = BenefitScoring(config_path)
         self.ranking = ProductRanker(config_path)
-        self.composer = PushComposer(config_path, templates_path)
+        # Инициализируем LLM композер (чистый режим)
+        self.composer = PushComposer(config_path, api_key)
+        logger.info("🤖 LLM композер готов (OpenAI GPT-4o-mini)")
         self.exporter = ResultExporter()
         
         logger.info("Пайплайн инициализирован успешно")
@@ -134,9 +138,9 @@ class RecommendationPipeline:
             
             # Шаг 6: Генерация push-уведомлений
             logger.info("\n[6/7] Генерация push-уведомлений...")
-            recommendations = self.composer.compose_push_for_clients(ranked_products, features, details)
+            recommendations = self.composer.compose_push_for_clients(features, details, ranked_products)
             results['pushes_generated'] = len(recommendations)
-            logger.info(f"✓ Сгенерировано {len(recommendations)} push-уведомлений")
+            logger.info(f"🏆 Сгенерировано {len(recommendations)} высококачественных LLM push-уведомлений")
             
             # Шаг 7: Экспорт результатов
             logger.info("\n[7/7] Экспорт результатов...")
@@ -286,10 +290,17 @@ def main():
         help='Только проверить входной файл без запуска пайплайна'
     )
     
+    parser.add_argument(
+        '--api-key',
+        type=str,
+        help='OpenAI API ключ (альтернатива .env файлу)'
+    )
+    
+    
     args = parser.parse_args()
     
     # Инициализация пайплайна
-    pipeline = RecommendationPipeline()
+    pipeline = RecommendationPipeline(api_key=args.api_key)
     
     # Проверка наличия входного файла
     if not args.input_file:

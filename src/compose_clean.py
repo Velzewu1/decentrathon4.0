@@ -40,43 +40,16 @@ class PushComposer:
         if api_key:
             self.client = OpenAI(api_key=api_key)
         else:
-            # Отладка: проверяем переменные окружения
-            logger.info("🔍 Проверяем переменные окружения...")
-            
-            # Проверяем все варианты
             api_key = os.getenv('OPENAI_API_KEY')
-            
-            logger.info(f"🔑 API ключ из окружения: {'FOUND' if api_key else 'NOT FOUND'}")
-            
-            if api_key:
-                logger.info(f"🔍 Ключ начинается с: {api_key[:10]}...")
-            
             if not api_key:
-                # Попробуем прочитать .env файл напрямую
-                try:
-                    with open('.env', 'r', encoding='utf-8') as f:
-                        content = f.read()
-                        logger.info(f"📄 .env файл найден, размер: {len(content)} символов")
-                        
-                        # Ищем ключ вручную
-                        for line in content.split('\n'):
-                            if 'OPENAI_API_KEY' in line and '=' in line:
-                                api_key = line.split('=', 1)[1].strip()
-                                logger.info(f"🔍 Найден ключ в .env: {api_key[:10]}...")
-                                break
-                                
-                except Exception as e:
-                    logger.error(f"Ошибка чтения .env: {e}")
-                
-                if not api_key:
-                    raise ValueError("""
+                raise ValueError("""
 ❌ OPENAI_API_KEY не найден!
 
-📝 Проверьте файл .env в корне проекта:
-OPENAI_API_KEY=your_api_key_here
+📝 Создайте файл .env в корне проекта:
+echo "OPENAI_API_KEY=your_api_key_here" > .env
 
 🔑 Получить ключ: https://platform.openai.com/api-keys
-                    """)
+                """)
             
             self.client = OpenAI(api_key=api_key)
             logger.info("✅ LLM режим активирован (OpenAI GPT-4o-mini)")
@@ -98,28 +71,21 @@ OPENAI_API_KEY=your_api_key_here
         return f"{formatted} ₸"
     
     def _create_system_prompt(self) -> str:
-        """Финальный системный промпт с учетом всех замечаний"""
+        """Системный промпт для персонализированной лаконичности"""
         return """Ты пишешь персональные банковские push по принципу "персонализированная лаконичность".
 
 🎯 ПРИНЦИП:
 • КОНКРЕТНЫЕ ЦИФРЫ - суммы, проценты, количество
 • ЛИЧНОЕ НАБЛЮДЕНИЕ - "вы часто...", "у вас много..."
-• ПРЕДЛОЖЕНИЕ ПРОДУКТА - что конкретно получит
+• КОРОТКО О ВЫГОДЕ - что конкретно получит
 • ПРОСТОЙ CTA - одно слово
 
-📏 ФОРМАТ: 180-220 символов, без КАПСА, МАКС 1 "!"
+📏 ФОРМАТ: 180-220 символов, без КАПСА, макс 1 "!"
 
-⚠️ КРИТИЧНО ИЗБЕГАЙ:
-• НЕ пиши "ваш депозит", "ваша карта" - у клиента её ещё нет!
-• НЕ пиши "вы получили кешбэк" - это ложь!
-• Пиши "вернула бы", "могли бы получить", "даст"
-• Премиальная: пиши "до 4%" (не фиксированные 3%)
-• Продукт "Депозит" не существует - пиши "Депозит Сберегательный"
-
-📝 ПРИМЕРЫ ПРАВИЛЬНЫХ PUSH:
-• "Айгерим, в августе вы потратили 67 400 ₸ на рестораны. Кредитная карта вернет до 10% кешбэка с ваших любимых категорий. Оформить карту."
-• "Данияр, ваш баланс 4,2 млн ₸ даёт право на до 4% кешбэк с премиальной карты. Плюс бесплатные снятия по миру. Оформить."
-• "Камилла, 190 поездок на такси за 463 000 ₸. Карта для путешествий вернула бы 4% кешбэка с поездок и дала бы доступ к VIP-залам. Оформить."
+📝 ПРИМЕРЫ ХОРОШИХ PUSH:
+• "Айгерим, в августе вы потратили 67 400 ₸ на рестораны. Кредитка вернула бы 6 740 ₸ кешбэком. Оформить."
+• "Данияр, ваш баланс 4,2 млн ₸ даёт право на 4% кешбэк с премиальной карты. Плюс бесплатные снятия. Оформить."
+• "Камилла, 190 поездок на такси за 463 000 ₸. Тревел-карта вернула бы 18 520 ₸. Оформить."
 
 Отвечай ТОЛЬКО текстом push-уведомления."""
 
@@ -142,96 +108,63 @@ OPENAI_API_KEY=your_api_key_here
             taxi_spend = client_data.get('spend_Такси', 0)
             travel_spend = client_data.get('spend_Путешествия', 0)
             total_travel = taxi_spend + travel_spend
+            trip_count = max(1, int(total_travel / 1500))
+            cashback = total_travel * 0.04
             
-            if total_travel > 0:
-                trip_count = max(1, int(total_travel / 1500))
-                cashback = total_travel * 0.04
-                travel_str = self._format_currency(total_travel)
-                cashback_str = self._format_currency(cashback)
-                prompt += f"Наблюдение: {trip_count} поездок на {travel_str}. Потенциальный кешбэк: {cashback_str}."
-            else:
-                prompt += f"Продукт: Карта для путешествий. 4% кешбэк с поездок, VIP-залы."
+            prompt += f"Наблюдение: {trip_count} поездок на {self._format_currency(total_travel)}. Кешбэк: {self._format_currency(cashback)}."
             
         elif product == "Премиальная карта":
             restaurant_spend = client_data.get('spend_Кафе и рестораны', 0)
             cosmetics_spend = client_data.get('spend_Косметика и парфюмерия', 0)
             balance = client_data.get('avg_monthly_balance_KZT', 0)
             monthly_premium = (restaurant_spend + cosmetics_spend) / 3
+            tier = 4 if balance > 6000000 else 3 if balance > 1000000 else 2
             
-            if monthly_premium > 0:
-                monthly_str = self._format_currency(monthly_premium)
-                prompt += f"Наблюдение: {monthly_str}/мес на рестораны/косметику. Премиальная карта: до 4% кешбэка."
-            else:
-                prompt += f"Продукт: Премиальная карта. До 4% кешбэка, VIP-обслуживание."
+            prompt += f"Наблюдение: {self._format_currency(monthly_premium)}/мес на рестораны/косметику. Кешбэк: {tier}%."
             
         elif product == "Кредитная карта":
             total_spend = client_data.get('total_spend', 0)
             monthly_spend = total_spend / 3
+            potential_cashback = min(total_spend * 0.10, 90000)
             top_cat1 = client_data.get('top_category_1', 'продукты')
             top_cat2 = client_data.get('top_category_2', 'рестораны')
             
-            if monthly_spend > 0:
-                monthly_str = self._format_currency(monthly_spend)
-                prompt += f"Наблюдение: {monthly_str}/мес на {top_cat1.lower()}, {top_cat2.lower()}. Кешбэк: до 10% с лимитом."
-            else:
-                prompt += f"Продукт: Кредитная карта. До 10% кешбэка, 62 дня без %."
+            prompt += f"Наблюдение: {self._format_currency(monthly_spend)}/мес на {top_cat1.lower()}, {top_cat2.lower()}. Кешбэк: {self._format_currency(potential_cashback)}."
             
         elif product == "Обмен валют":
             fx_volume = client_data.get('fx_volume', 0)
+            monthly_fx = fx_volume / 3
+            savings = fx_volume * 0.01
             
-            if fx_volume > 0:
-                fx_volume_str = self._format_currency(fx_volume)
-                prompt += f"Наблюдение: валютные операции на {fx_volume_str}. Выгодный курс 24/7, автопокупка."
-            else:
-                prompt += f"Продукт: Обмен валют в приложении. Выгодный курс, целевой курс."
+            prompt += f"Наблюдение: {self._format_currency(monthly_fx)}/мес валютных операций. Экономия: {self._format_currency(savings)}."
             
         elif product in ["Депозит Сберегательный", "Депозит Накопительный", "Депозит Мультивалютный"]:
             balance = client_data.get('avg_monthly_balance_KZT', 0)
             free_funds = client_data.get('free_funds', 0)
             rate = 16.5 if 'Сберегательный' in product else 15.5 if 'Накопительный' in product else 14.5
+            monthly_income = free_funds * (rate/100) / 12
             
-            if free_funds > 0:
-                monthly_income = free_funds * (rate/100) / 12
-                free_funds_str = self._format_currency(free_funds)
-                income_str = self._format_currency(monthly_income)
-                prompt += f"Наблюдение: {free_funds_str} могут приносить доход. Потенциал: {income_str}/мес под {rate}%."
-            else:
-                prompt += f"Продукт: {product} под {rate}% годовых. Надежное размещение средств."
+            prompt += f"Наблюдение: {self._format_currency(free_funds)} лежат без дела. Доход: {self._format_currency(monthly_income)}/мес под {rate}%."
             
         elif product == "Инвестиции":
             free_funds = client_data.get('free_funds', 0)
-            age = client_data.get('age', 35)
+            potential_return = free_funds * 0.20 / 12
             
-            if free_funds > 0:
-                free_funds_str = self._format_currency(free_funds)
-                prompt += f"Наблюдение: {free_funds_str} могут потенциально работать. Возраст: {age}. Порог входа: 6₸."
-            else:
-                prompt += f"Продукт: Инвестиции от 6₸ без комиссий. Подходит для начала."
+            prompt += f"Наблюдение: {self._format_currency(free_funds)} могут работать. Потенциал: {self._format_currency(potential_return)}/мес."
             
         elif product == "Золотые слитки":
             balance = client_data.get('avg_monthly_balance_KZT', 0)
+            gold_allocation = balance * 0.15
             
-            if balance > 0:
-                balance_str = self._format_currency(balance)
-                prompt += f"Наблюдение: баланс {balance_str}. Золото 999 пробы для диверсификации."
-            else:
-                prompt += f"Продукт: Золотые слитки 999 пробы. Диверсификация портфеля."
+            prompt += f"Баланс: {self._format_currency(balance)}. Золото 999 пробы для защиты капитала."
             
         elif product == "Кредит наличными":
             outflows = client_data.get('outflows', 0)
             inflows = client_data.get('inflows', 1)
             shortage = max(0, outflows - inflows)
+            limit = min(2000000, shortage * 2)
             
-            if shortage > 0:
-                shortage_str = self._format_currency(shortage)
-                limit = min(2000000, shortage * 2)
-                limit_str = self._format_currency(limit)
-                prompt += f"Наблюдение: дефицит {shortage_str}. Лимит: до {limit_str}, от 12%."
-            else:
-                prompt += f"Продукт: Кредит наличными от 12% без залога."
-            
-        elif product == "Депозит":  # Исправляем на справильное название
-            prompt += f"Продукт: Депозит Сберегательный под 16,5% годовых. Надежное размещение."
+            prompt += f"Лимит: {self._format_currency(limit)}. От 12% годовых, без залога."
             
         prompt += "\n\nНапиши простой, короткий и уникальный push."
         
